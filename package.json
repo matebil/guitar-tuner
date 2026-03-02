@@ -1,18 +1,42 @@
 {
   "name": "matebil-tuner",
   "version": "1.0.0",
-  "main": "index.ts",
+  "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
-    "web": "expo start --web"
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "ios:release": "expo run:ios --configuration Release",
+    "android:release": "expo run:android --variant release",
+    "check": "expo install --check",
+    "prebuild:clean": "expo prebuild --clean && node plugins/with-fortify-fix.js"
   },
   "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-picker/picker": "2.11.4",
+    "@react-navigation/bottom-tabs": "^7.10.1",
+    "@react-navigation/elements": "^2.9.8",
+    "@react-navigation/native": "^7.1.28",
+    "@siteed/expo-audio-studio": "^2.18.5",
     "expo": "~55.0.4",
+    "expo-audio": "~55.0.8",
+    "expo-constants": "~55.0.7",
+    "expo-haptics": "~55.0.8",
+    "expo-linking": "~55.0.7",
+    "expo-router": "~55.0.3",
     "expo-status-bar": "~55.0.4",
+    "expo-symbols": "~55.0.4",
+    "expo-web-browser": "~55.0.9",
+    "pitchfinder": "^2.3.4",
     "react": "19.2.0",
-    "react-native": "0.83.2"
+    "react-native": "0.83.2",
+    "react-native-gesture-handler": "~2.30.0",
+    "react-native-reanimated": "4.2.1",
+    "react-native-safe-area-context": "~5.6.2",
+    "react-native-screens": "~4.23.0",
+    "react-native-worklets": "0.7.2"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
