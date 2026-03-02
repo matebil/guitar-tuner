@@ -1,6 +1,7 @@
 import { useSettings } from '@/src/contexts/SettingsContext';
 import { AudioPlayer, createAudioPlayer, setAudioModeAsync } from 'expo-audio';
-import React, { useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -20,6 +21,15 @@ export default function MetronomeScreen() {
   const bpmRef = useRef<number>(120);
   const beatsPerMeasureRef = useRef<number>(4);
 
+  // Stop metronome when leaving the tab (tabs don't unmount)
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        stopMetronome();
+      };
+    }, [])
+  );
+
   // Keep refs in sync with state
   useEffect(() => {
     bpmRef.current = bpm;
@@ -33,7 +43,6 @@ export default function MetronomeScreen() {
   useEffect(() => {
     const setupAudio = async () => {
       try {
-        // Set audio mode for PLAYBACK ONLY - no recording needed for metronome
         await setAudioModeAsync({
           playsInSilentMode: true,
           allowsRecording: false,
@@ -41,12 +50,11 @@ export default function MetronomeScreen() {
           interruptionMode: 'mixWithOthers',
           shouldRouteThroughEarpiece: false,
         });
-
+      } catch (_) {}
+      try {
         await loadSounds();
-        setAudioReady(true);
-      } catch (error) {
-        // Silent error handling
-      }
+      } catch (_) {}
+      setAudioReady(true); // Always mark ready
     };
     setupAudio();
     return () => {
@@ -63,53 +71,37 @@ export default function MetronomeScreen() {
   }, []);
 
   const loadSounds = async () => {
-    try {
-      const click = createAudioPlayer(require('../../assets/sounds/metronome/tick.wav'));
-      click.volume = 1.0;
-      clickSound.current = click;
-
-      const accent = createAudioPlayer(require('../../assets/sounds/metronome/tock.wav'));
-      accent.volume = 1.0;
-      accentSound.current = accent;
-
-      // Warm up the sounds by playing them silently to initialize audio decoder
-      click.volume = 0;
-      await click.seekTo(0); click.play();
-      await new Promise(resolve => setTimeout(resolve, 100));
-      click.pause(); await click.seekTo(0);
-      click.volume = 1.0;
-
-      accent.volume = 0;
-      await accent.seekTo(0); accent.play();
-      await new Promise(resolve => setTimeout(resolve, 100));
-      accent.pause(); await accent.seekTo(0);
-      accent.volume = 1.0;
-    } catch (error) {
-      // Silent error handling
-    }
+    const click = createAudioPlayer(require('../../assets/sounds/metronome/tick.wav'));
+    click.volume = 1;
+    clickSound.current = click;
+    const accent = createAudioPlayer(require('../../assets/sounds/metronome/tock.wav'));
+    accent.volume = 1;
+    accentSound.current = accent;
   };
 
   const playClick = (isAccent: boolean) => {
-    if (!audioReady) return;
-    
     try {
       const sound = isAccent ? accentSound.current : clickSound.current;
       if (sound) {
-        sound.seekTo(0); // fire-and-forget — do NOT await, adds per-beat latency
-        sound.play();
+        sound.seekTo(0).then(() => sound.play()).catch(() => {});
       }
-    } catch (error) {
-      // Silent error handling
-    }
+    } catch (_) {}
   };
 
-  const startMetronome = () => {
+  const startMetronome = async () => {
     if (!audioReady) return;
-    
-    if (isPlaying) {
-      stopMetronome();
-      return;
-    }
+    if (isPlaying) { stopMetronome(); return; }
+
+    // Re-apply playback mode — tuner tab sets allowsRecording:true which breaks playback
+    try {
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: false,
+        shouldPlayInBackground: false,
+        interruptionMode: 'mixWithOthers',
+        shouldRouteThroughEarpiece: false,
+      });
+    } catch (_) {}
 
     setIsPlaying(true);
     currentBeatRef.current = 0;

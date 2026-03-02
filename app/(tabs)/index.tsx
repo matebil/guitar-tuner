@@ -3,7 +3,8 @@ import TuningBar from '@/src/components/TuningBar';
 import { DEFAULT_TUNING, TUNINGS } from '@/src/constants/tunings';
 import { useSettings } from '@/src/contexts/SettingsContext';
 import { logger } from '@/src/utils/logger';
-import { AudioPlayer, createAudioPlayer, setAudioModeAsync } from 'expo-audio';
+import { setAudioModeAsync } from 'expo-audio';
+import * as Haptics from 'expo-haptics';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -35,7 +36,6 @@ export default function HomeScreen() {
   });
   const clearTimeoutRef = useRef<number | null>(null);
   const blinkAnim = useRef(new Animated.Value(1)).current;
-  const inTuneSound = useRef<AudioPlayer | null>(null);
   const wasInTuneRef = useRef(false);
   const animationRef = useRef<Animated.CompositeAnimation | null>(null);
 
@@ -62,23 +62,15 @@ export default function HomeScreen() {
   // Setup audio mode when screen is focused (and stop when unfocused)
   useFocusEffect(
     useCallback(() => {
-      const setupAudio = async () => {
-        try {
-          await setAudioModeAsync({
-            playsInSilentMode: true,
-            allowsRecording: true,
-            shouldPlayInBackground: false,
-            interruptionMode: 'duckOthers',
-            shouldRouteThroughEarpiece: false,
-          });
-          setIsListening(true);
-        } catch (error) {
-          logger.error('Audio setup error:', error);
-        }
-      };
-      setupAudio();
-      
-      // Cleanup when leaving screen
+      setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: true,
+        shouldPlayInBackground: false,
+        interruptionMode: 'mixWithOthers',
+        shouldRouteThroughEarpiece: false,
+      }).catch((e) => logger.error('Audio setup error:', e));
+      setIsListening(true);
+
       return () => {
         setIsListening(false);
       };
@@ -159,16 +151,9 @@ export default function HomeScreen() {
     wasInTuneRef.current = isInTune;
   };
 
-  // Play sound when in tune
+  // Haptic feedback when in tune (avoids audio session conflicts with recording)
   const playInTuneSound = useCallback(() => {
-    try {
-      inTuneSound.current?.remove();
-      const player = createAudioPlayer(require('@/assets/sounds/ping.mp3'));
-      inTuneSound.current = player;
-      player.play();
-    } catch (error) {
-      // Silently fail if sound not available
-    }
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
   }, []);
 
   // Cleanup timeout on unmount
