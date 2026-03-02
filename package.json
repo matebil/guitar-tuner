@@ -10,7 +10,7 @@
     "ios:release": "expo run:ios --configuration Release",
     "android:release": "expo run:android --variant release",
     "check": "expo install --check",
-    "prebuild:clean": "expo prebuild --clean && node plugins/with-fortify-fix.js"
+    "prebuild:clean": "expo prebuild --clean && node plugins/with-fortify-fix.js && node plugins/with-sandboxing-fix.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",

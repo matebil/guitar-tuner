@@ -13,8 +13,10 @@
       "backgroundColor": "#0F1F15"
     },
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.matebil.matebil-tuner",
+      "supportsTablet": false,
+      "bundleIdentifier": "com.matebil.tuner",
+      "buildNumber": "2",
+      "appleTeamId": "3534LJA34T",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Microphone access is needed for pitch detection."
       }

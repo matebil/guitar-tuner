@@ -16,10 +16,15 @@ const MARKER = '# [fortify-fix]';
 const PODFILE = path.join(__dirname, '../ios/Podfile');
 
 // This snippet is inserted just before the closing `end` of the existing post_install block
-const FORTIFY_SNIPPET = `    # [fortify-fix] _FORTIFY_SOURCE=0 for Release — fixes jsi.h snprintf false-positive on Xcode 16
+const FORTIFY_SNIPPET = `    # [fortify-fix] Disable User Script Sandboxing — Hermes ip.txt write blocked by sandbox (Xcode 15+ recommendation)
     installer.pods_project.targets.each do |target|
       target.build_configurations.each do |config|
-        next unless config.name == 'Release'
+        config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
+      end
+    end
+    # [fortify-fix] _FORTIFY_SOURCE=0 — fixes jsi.h snprintf false-positive on Xcode 16 (all configs)
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
         defs = config.build_settings['GCC_PREPROCESSOR_DEFINITIONS']
         if defs.nil?
           defs = ['$(inherited)']
