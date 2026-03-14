@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "matebil-tuner",
-    "slug": "matebil-tuner",
+    "name": "Guitar Tuner & Intonation",
+    "slug": "guitar-tuner-intonation",
     "scheme": "matebiltuner",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -15,10 +15,10 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.matebil.tuner",
-      "buildNumber": "2",
+      "buildNumber": "3",
       "appleTeamId": "3534LJA34T",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Microphone access is needed for pitch detection."
+        "NSMicrophoneUsageDescription": "This app needs microphone access to detect guitar pitch for tuning."
       }
     },
     "android": {

@@ -4,8 +4,13 @@ import { Linking, ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, Vie
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function SettingsScreen() {
-  const { settings, updateReferencePitch, updateYinThreshold, getThemeColors } = useSettings();
+  const { settings, updateReferencePitch, updateYinThreshold, updateTheme, getThemeColors } = useSettings();
   const colors = getThemeColors();
+
+  const themeOptions = [
+    { value: 'dark' as const, label: '🌙 Night' },
+    { value: 'light' as const, label: '☀️ Day' },
+  ];
 
   const pitchOptions = [
     { value: 432, label: '432 Hz (Verdi\'s A)' },
@@ -30,7 +35,7 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle={settings.theme === 'light' ? 'dark-content' : 'light-content'} />
       <ScrollView style={styles.scrollView}>
         
         {/* Header */}
@@ -88,6 +93,32 @@ export default function SettingsScreen() {
                   styles.optionButtonText,
                   { color: settings.yinThreshold === option.value ? colors.textOnPrimary : colors.textSecondary },
                   settings.yinThreshold === option.value && styles.optionButtonTextActive
+                ]}>
+                  {option.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Theme Section */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionTitle, { color: colors.primary }]}>Theme</Text>
+          <View style={styles.optionsContainer}>
+            {themeOptions.map((option) => (
+              <TouchableOpacity
+                key={option.value}
+                style={[
+                  styles.optionButton,
+                  { backgroundColor: colors.buttonBg, borderColor: colors.buttonBorder },
+                  settings.theme === option.value && { backgroundColor: colors.primary, borderColor: colors.primary }
+                ]}
+                onPress={() => updateTheme(option.value)}
+              >
+                <Text style={[
+                  styles.optionButtonText,
+                  { color: settings.theme === option.value ? colors.textOnPrimary : colors.textSecondary },
+                  settings.theme === option.value && styles.optionButtonTextActive
                 ]}>
                   {option.label}
                 </Text>

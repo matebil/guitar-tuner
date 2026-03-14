@@ -7,7 +7,7 @@ import { setAudioModeAsync } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, AppState, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function HomeScreen() {
@@ -20,9 +20,9 @@ export default function HomeScreen() {
   const [selectedString, setSelectedString] = useState(null); // For manual mode
   const [rawFrequency, setRawFrequency] = useState(null);
   const [bufferStatus, setBufferStatus] = useState({ current: 0, needed: 0 });
-  const [signalLevel, setSignalLevel] = useState(0);
-  const [showWeakSignal, setShowWeakSignal] = useState(false);
-  const weakSignalTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isListeningRef = useRef(isListening);
+  const hasFrequencyRef = useRef(false);
+  useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
   const [isDetecting, setIsDetecting] = useState(false); // For manual mode blinking
   const [detectionData, setDetectionData] = useState({
     frequency: null,
@@ -34,30 +34,9 @@ export default function HomeScreen() {
     targetFrequency: null,
     centsOff: 0,
   });
-  const clearTimeoutRef = useRef<number | null>(null);
   const blinkAnim = useRef(new Animated.Value(1)).current;
   const wasInTuneRef = useRef(false);
   const animationRef = useRef<Animated.CompositeAnimation | null>(null);
-
-  // Weak-signal banner: show immediately, hide immediately on note, hold 1.5 s otherwise
-  useEffect(() => {
-    const isWeak = isListening && !detectionData.frequency && signalLevel > 0.012 && signalLevel < 0.055;
-    if (detectionData.frequency) {
-      // Note detected — dismiss instantly
-      if (weakSignalTimerRef.current) { clearTimeout(weakSignalTimerRef.current); weakSignalTimerRef.current = null; }
-      setShowWeakSignal(false);
-    } else if (isWeak) {
-      if (weakSignalTimerRef.current) { clearTimeout(weakSignalTimerRef.current); weakSignalTimerRef.current = null; }
-      setShowWeakSignal(true);
-    } else {
-      if (!weakSignalTimerRef.current) {
-        weakSignalTimerRef.current = setTimeout(() => {
-          setShowWeakSignal(false);
-          weakSignalTimerRef.current = null;
-        }, 1000);
-      }
-    }
-  }, [signalLevel, detectionData.frequency, isListening]);
 
   // Setup audio mode when screen is focused (and stop when unfocused)
   useFocusEffect(
@@ -66,7 +45,7 @@ export default function HomeScreen() {
         playsInSilentMode: true,
         allowsRecording: true,
         shouldPlayInBackground: false,
-        interruptionMode: 'mixWithOthers',
+        interruptionMode: 'doNotMix',
         shouldRouteThroughEarpiece: false,
       }).catch((e) => logger.error('Audio setup error:', e));
       setIsListening(true);
@@ -76,6 +55,27 @@ export default function HomeScreen() {
       };
     }, [])
   );
+
+  // Stop the microphone when the app goes to the background
+  const isFocusedRef = useRef(false);
+  useFocusEffect(
+    useCallback(() => {
+      isFocusedRef.current = true;
+      return () => { isFocusedRef.current = false; };
+    }, [])
+  );
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (!isFocusedRef.current) return; // Only act when this screen is the active tab
+      if (nextState === 'background' || nextState === 'inactive') {
+        setIsListening(false);
+      } else if (nextState === 'active') {
+        setIsListening(true);
+      }
+    });
+    return () => subscription.remove();
+  }, []);
 
   // Start/stop blinking animation
   useEffect(() => {
@@ -110,32 +110,26 @@ export default function HomeScreen() {
   }, [isDetecting, mode]);
 
   const handleFrequencyDetected = (data: any) => {
-    // Clear any existing timeout
-    if (clearTimeoutRef.current) {
-      clearTimeout(clearTimeoutRef.current);
-      clearTimeoutRef.current = null;
-    }
-    
-    // If no frequency, clear after a short delay (200ms)
+    // If no frequency, clear the display immediately
     if (!data.frequency) {
-      clearTimeoutRef.current = setTimeout(() => {
-        setDetectionData({
-          frequency: null,
-          detectedString: null,
-          detectedNote: null,
-          actualNote: null,
-          stringNumber: null,
-          fret: null,
-          targetFrequency: null,
-          centsOff: 0,
-        });
-        setIsDetecting(false);
-        wasInTuneRef.current = false;
-      }, 200);
+      hasFrequencyRef.current = false;
+      setDetectionData({
+        frequency: null,
+        detectedString: null,
+        detectedNote: null,
+        actualNote: null,
+        stringNumber: null,
+        fret: null,
+        targetFrequency: null,
+        centsOff: 0,
+      });
+      setIsDetecting(false);
+      wasInTuneRef.current = false;
       return;
     }
     
     // We have a frequency - update display
+    hasFrequencyRef.current = true;
     setDetectionData(data);
     
     // Track if we're detecting something in manual mode or intonation mode with selected string
@@ -154,15 +148,6 @@ export default function HomeScreen() {
   // Haptic feedback when in tune (avoids audio session conflicts with recording)
   const playInTuneSound = useCallback(() => {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-  }, []);
-
-  // Cleanup timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (clearTimeoutRef.current) {
-        clearTimeout(clearTimeoutRef.current);
-      }
-    };
   }, []);
 
   return (
@@ -414,22 +399,6 @@ export default function HomeScreen() {
             : detectionData.detectedString}
           colors={colors}
         />
-        {/* Weak-signal warning */}
-        {showWeakSignal ? (
-          <View style={{
-            marginTop: 2,
-            flexDirection: 'row', alignItems: 'center', gap: 6,
-            paddingHorizontal: 14, paddingVertical: 5,
-            borderRadius: 20,
-            borderWidth: 1, borderColor: '#F5A623',
-            backgroundColor: '#F5A62318',
-          }}>
-            <Text style={{ fontSize: 13 }}>🎸</Text>
-            <Text style={{ color: '#F5A623', fontSize: 12, fontFamily: 'monospace', fontWeight: '600' }}>
-              Move the guitar closer
-            </Text>
-          </View>
-        ) : null}
         {/* Cents chip — right below the gauge */}
         {detectionData.frequency ? (() => {
           const cents = detectionData.centsOff;
@@ -454,6 +423,7 @@ export default function HomeScreen() {
             </View>
           );
         })() : null}
+
       </View>
 
       {/* Frequency info panel */}
@@ -489,7 +459,7 @@ export default function HomeScreen() {
         selectedString={selectedString}
         onRawFrequency={setRawFrequency as any}
         onBufferStatus={setBufferStatus as any}
-        onSignalLevel={setSignalLevel as any}
+        onSignalLevel={() => {}}
         referencePitch={settings.referencePitch}
         yinThreshold={settings.yinThreshold}
       />

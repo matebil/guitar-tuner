@@ -7,6 +7,7 @@
 
 import { ExpoAudioStreamModule } from '@siteed/expo-audio-studio';
 import { requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
+import { File } from 'expo-file-system/next';
 import Pitchfinder from 'pitchfinder';
 import { useEffect, useRef, useState } from 'react';
 import { calculateCents } from '../utils/audioUtils';
@@ -15,14 +16,21 @@ import { logger } from '../utils/logger';
 const SAMPLE_RATE = 44100;
 const BUFFER_SIZE = 4096;
 const MIN_FREQUENCY = 60;
-const MAX_FREQUENCY = 400;
+const MAX_FREQUENCY = 1400; // Full guitar range: low E2 (82 Hz) to high e fret 24 (1318 Hz)
+const INPUT_GAIN  = 6;         // Pre-gain boost — makes acoustic/unplugged guitar as readable as Guitar Tuna
 const MEDIAN_WIN = 3;          // minimal window — just kills single-sample spikes without freezing
-const MEDIAN_MIN_FILL = 2;    // need ≥2 readings before reporting (avoids 1-sample sharp spikes)
+const MEDIAN_MIN_FILL = 1;    // report on first valid pitch reading — no need to wait for 2
 const ONSET_RMS_RATIO = 2.5;  // RMS jump ratio that marks a new pluck
 const ONSET_SUPPRESS = 1;     // number of buffers to skip after onset (~23 ms)
-const SILENCE_RMS = 0.012;    // hard silence gate
-const FADE_RMS    = 0.025;    // "dying note" threshold
-const FADE_COUNT  = 3;        // consecutive low-energy buffers before clearing note
+// Post-gain (×6) levels guide:
+//   True silence / mic floor  : ~0.002–0.008
+//   Keyboard / ambient noise  : ~0.010–0.020
+//   Fading acoustic guitar    : ~0.025–0.060
+//   Normal acoustic playing   : ~0.060–0.200
+const SILENCE_RMS     = 0.012;  // hard silence gate — clears true silence & mic floor immediately
+const FADE_RMS        = 0.028;  // dying-note zone — above ambient, below fading guitar
+const FADE_RESET_RMS  = 0.060;  // only reset fade counter if signal this strong (genuine new note)
+const FADE_COUNT      = 2;      // buffers without strong signal before clearing (~140 ms)
 
 /**
  * Sub-sample autocorrelation refinement.
@@ -129,9 +137,23 @@ export default function FrequencyDetector({
 
     let subscription;
     let currentStreamUuid;
+    let isStreamActive = false;  // guard: tracks if OUR stream is running
+    let startAborted = false;    // guard: prevents race when effect re-runs
 
     const startAudioStream = async () => {
       try {
+        // Stop any previous recording gracefully — ignore error if none was running
+        if (isStreamActive) {
+          try { await ExpoAudioStreamModule.stopRecording(); } catch (_) {}
+          isStreamActive = false;
+        } else {
+          // Attempt to stop a stale stream from a previous mount
+          try { await ExpoAudioStreamModule.stopRecording(); } catch (_) {}
+        }
+        await new Promise(resolve => setTimeout(resolve, 150));
+
+        if (startAborted) return;  // effect was cleaned up while we waited
+
         startTimeRef.current = performance.now();
         firstEventRef.current = false;
         firstDetectionRef.current = false;
@@ -144,8 +166,10 @@ export default function FrequencyDetector({
 
         const { granted } = await requestRecordingPermissionsAsync();
         if (!granted) { logger.warn('[Tuner] Microphone permission denied'); return; }
+        if (startAborted) return;
 
         await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+        if (startAborted) return;
 
         const result = await ExpoAudioStreamModule.startRecording({
           sampleRate: SAMPLE_RATE,
@@ -155,6 +179,13 @@ export default function FrequencyDetector({
           enableProcessing: false,
         });
 
+        if (startAborted) {
+          // Cleanup immediately if effect was torn down during startRecording
+          try { await ExpoAudioStreamModule.stopRecording(); } catch (_) {}
+          return;
+        }
+
+        isStreamActive = true;
         currentStreamUuid = result.fileUri;
         setStreamUuid(result.fileUri);
 
@@ -167,6 +198,12 @@ export default function FrequencyDetector({
             const int16Array = new Int16Array(bytes.buffer);
             const audioData = new Float32Array(int16Array.length);
             for (let i = 0; i < int16Array.length; i++) audioData[i] = int16Array[i] / 32768.0;
+            // Boost quiet signals (acoustic/unplugged guitar) to match commercial tuner sensitivity
+            for (let i = 0; i < audioData.length; i++) {
+              audioData[i] = audioData[i] * INPUT_GAIN;
+              if (audioData[i] > 1) audioData[i] = 1;
+              else if (audioData[i] < -1) audioData[i] = -1;
+            }
             if (audioData.length > 0) {
               processAudioData(audioData);
               onBufferStatus({ current: audioBuffer.current.length, needed: BUFFER_SIZE });
@@ -183,12 +220,25 @@ export default function FrequencyDetector({
 
     let lastFrequency = null;
     const processAudioData = (floatSamples) => {
-      audioBuffer.current.push(...floatSamples);
+      // Accumulate incoming samples
+      const combined = new Float32Array(audioBuffer.current.length + floatSamples.length);
+      combined.set(audioBuffer.current);
+      combined.set(floatSamples, audioBuffer.current.length);
+      audioBuffer.current = combined;
 
       if (audioBuffer.current.length >= BUFFER_SIZE) {
-        const bufferSlice = audioBuffer.current.slice(0, BUFFER_SIZE);
-        audioBuffer.current = audioBuffer.current.slice(-Math.floor(BUFFER_SIZE * 0.5));
-
+        // ALWAYS take the NEWEST BUFFER_SIZE samples — prevents latency building up
+        // when the JS thread falls behind (GC pause, tab switch, etc.).
+        // Any samples older than BUFFER_SIZE are stale and will only add delay.
+        const isBacklogged = audioBuffer.current.length > BUFFER_SIZE;
+        const bufferSlice = isBacklogged
+          ? audioBuffer.current.slice(-BUFFER_SIZE)
+          : audioBuffer.current.slice(0, BUFFER_SIZE);
+        // When backlogged: clear completely so we catch up in one cycle.
+        // When normal: keep a 25% overlap (~1024 samples) for continuity.
+        audioBuffer.current = isBacklogged
+          ? new Float32Array(0)
+          : audioBuffer.current.slice(-Math.floor(BUFFER_SIZE * 0.25));
         // ── Silence gate ─────────────────────────────────────────────
         let sumSq = 0;
         for (let i = 0; i < bufferSlice.length; i++) sumSq += bufferSlice[i] * bufferSlice[i];
@@ -203,15 +253,22 @@ export default function FrequencyDetector({
           fadeCountRef.current = 0;
           lastFrequency = null;
           onRawFrequency(null);
-          onSignalLevel(0);
           onFrequencyDetected({ frequency: null, detectedString: null, detectedNote: null,
             stringNumber: null, targetFrequency: null, centsOff: 0 });
           return;
         }
 
-        // Fast-fade gate: if energy stays low for a few consecutive buffers, clear note
-        if (rms < FADE_RMS) {
-          fadeCountRef.current++;
+        // Fast-fade gate: count buffers without a strong signal.
+        // Only reset the counter when signal is clearly a new strong note (rms > FADE_RESET_RMS).
+        // Bounces in the dying-note zone (FADE_RMS..FADE_RESET_RMS) intentionally do NOT reset,
+        // so a decaying acoustic string clears in ~2 buffers instead of lingering for seconds.
+        if (rms >= FADE_RESET_RMS) {
+          fadeCountRef.current = 0; // strong new note — reset
+        } else {
+          // rms is below FADE_RESET_RMS (dying or silent) — always increment
+          if (rms < FADE_RMS) {
+            fadeCountRef.current++;
+          }
           if (fadeCountRef.current >= FADE_COUNT) {
             smoothedFrequencyRef.current = null;
             prevRmsRef.current = 0;
@@ -223,8 +280,6 @@ export default function FrequencyDetector({
               stringNumber: null, targetFrequency: null, centsOff: 0 });
             return;
           }
-        } else {
-          fadeCountRef.current = 0;
         }
 
         // ── Onset detection: suppress attack transients ───────────────
@@ -243,6 +298,27 @@ export default function FrequencyDetector({
           return; // still in attack phase — don't report yet
         }
 
+        // ── Zero-phase high-pass at 80 Hz (removes 50/60 Hz amp hum) ─
+        const K_hp = Math.tan(Math.PI * 80 / SAMPLE_RATE);
+        const K2_hp = K_hp * K_hp, sq2K_hp = Math.SQRT2 * K_hp;
+        const norm_hp = 1 / (1 + sq2K_hp + K2_hp);
+        const b0_hp = norm_hp, b1_hp = -2 * norm_hp, b2_hp = norm_hp;
+        const a1_hp = 2 * (K2_hp - 1) * norm_hp, a2_hp = (1 - sq2K_hp + K2_hp) * norm_hp;
+        const hpFwd = new Float32Array(bufferSlice.length);
+        let hx1 = 0, hx2 = 0, hy1 = 0, hy2 = 0;
+        for (let i = 0; i < bufferSlice.length; i++) {
+          const x0 = bufferSlice[i];
+          hpFwd[i] = b0_hp*x0 + b1_hp*hx1 + b2_hp*hx2 - a1_hp*hy1 - a2_hp*hy2;
+          hx2 = hx1; hx1 = x0; hy2 = hy1; hy1 = hpFwd[i];
+        }
+        const hpFiltered = new Float32Array(bufferSlice.length);
+        hx1 = 0; hx2 = 0; hy1 = 0; hy2 = 0;
+        for (let i = bufferSlice.length - 1; i >= 0; i--) {
+          const x0 = hpFwd[i];
+          hpFiltered[i] = b0_hp*x0 + b1_hp*hx1 + b2_hp*hx2 - a1_hp*hy1 - a2_hp*hy2;
+          hx2 = hx1; hx1 = x0; hy2 = hy1; hy1 = hpFiltered[i];
+        }
+
         // ── Zero-phase low-pass at 1200 Hz (kills 17 kHz YIN ghosts) ─
         const K  = Math.tan(Math.PI * 1200 / SAMPLE_RATE);
         const K2 = K * K, sq2K = Math.SQRT2 * K;
@@ -252,7 +328,7 @@ export default function FrequencyDetector({
         const fwd = new Float32Array(bufferSlice.length);
         let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
         for (let i = 0; i < bufferSlice.length; i++) {
-          const x0 = bufferSlice[i];
+          const x0 = hpFiltered[i]; // feed HP output into LP
           fwd[i] = b0*x0 + b1*x1 + b2*x2 - a1*y1 - a2*y2;
           x2 = x1; x1 = x0; y2 = y1; y1 = fwd[i];
         }
@@ -267,8 +343,8 @@ export default function FrequencyDetector({
         // ── Pitch detection: YIN → sub-sample refinement ─────────────
         let frequency = detectPitch.current(filtered);
 
-        // Reject ultrasonic garbage
-        if (frequency && frequency > 1000) return;
+        // Reject out-of-range frequencies
+        if (frequency && frequency > MAX_FREQUENCY) return;
 
         // Sub-sample autocorrelation refinement on the FILTERED signal
         // Uses the same low-passed signal YIN used — avoids sharp bias from
@@ -453,13 +529,22 @@ export default function FrequencyDetector({
 
     startAudioStream();
 
-    // Cleanup on unmount
+    // Cleanup on unmount or when isActive becomes false
     return () => {
+      startAborted = true;
       if (subscription) {
         subscription.remove();
       }
-      if (currentStreamUuid) {
-        ExpoAudioStreamModule.stopRecording().catch(logger.error);
+      if (isStreamActive) {
+        isStreamActive = false;
+        ExpoAudioStreamModule.stopRecording()
+          .then(() => {
+            // Delete the recorded audio file to prevent unbounded disk growth
+              if (currentStreamUuid) {
+                try { new File(currentStreamUuid).delete(); } catch (_) {}
+              }
+          })
+          .catch(() => {});
       }
     };
   }, [isActive]); // Only restart when isActive changes - refs keep other values current

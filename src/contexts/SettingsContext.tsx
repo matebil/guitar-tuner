@@ -88,21 +88,21 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     switch (settings.theme) {
       case 'light':
         return {
-          background: '#f0f0f0',
-          primary: '#0066ff',
-          primaryBorder: '#0088ff',
-          secondary: '#333',
-          text: '#000',
-          textSecondary: '#666',
-          textOnPrimary: '#fff',
-          buttonBg: '#e0e0e0',
-          buttonBorder: '#ccc',
-          flat: '#ff6600',
-          flatBorder: '#ff8800',
-          sharp: '#cc0066',
-          sharpBorder: '#ff0088',
-          inTune: '#00aa00',
-          inTuneBorder: '#00cc00',
+          background: '#F2FAF5',      // Matebil surface-light
+          primary: '#1E6B35',         // Matebil primary (dark green)
+          primaryBorder: '#155227',
+          secondary: '#E8F5EE',
+          text: '#0F1F15',            // Matebil surface-dark (near-black green)
+          textSecondary: '#4A7A5E',
+          textOnPrimary: '#F2FAF5',
+          buttonBg: '#E8F5EE',
+          buttonBorder: '#B8D8C4',
+          flat: '#E07B00',            // Darker amber — legible on white
+          flatBorder: '#C06900',
+          sharp: '#C02060',
+          sharpBorder: '#A01850',
+          inTune: '#1E6B35',
+          inTuneBorder: '#155227',
         };
       case 'classic':
         return {

@@ -22,6 +22,7 @@ const MAPPING = {
   'tuningfork': 'tune',
   'metronome': 'av-timer',
   'gearshape.fill': 'settings',
+  'music.note.list': 'queue-music',
 } as IconMapping;
 
 /**

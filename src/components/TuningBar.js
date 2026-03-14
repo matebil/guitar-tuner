@@ -84,12 +84,14 @@ export default function TuningBar({ centsOff = 0, isActive = false, noteName = n
   // Bars radiate UPWARD and outward from (OX, OY).
   // Angle 0 = straight up (centre bar). Bars are rotated by their angle.
   // Height varies: tallest at centre, shortest at edges.
+  // Width is intentionally thick (fuel-gauge segments) — the arc spacing
+  // between bars provides the natural gap without explicit padding.
   const bars = Array.from({ length: NUM_BARS }, (_, i) => {
     const t      = (i - CENTER) / CENTER;                        // –1 … +1
     const angle  = t * (ARC_DEG / 2);                           // –80 … +80 deg
     const rad    = (angle * Math.PI) / 180;
     const barH   = MIN_BAR_H + (MAX_BAR_H - MIN_BAR_H) * Math.pow(1 - Math.abs(t), 1.4);
-    const barW   = i === CENTER ? 4 : 2.5;
+    const barW   = i === CENTER ? 9 : 7;                        // filled segments
     const midR   = INNER_R + barH / 2;
     // Position the centre of the bar on the arc, bars point outward from origin
     const cx     = OX + midR * Math.sin(rad) - barW / 2;

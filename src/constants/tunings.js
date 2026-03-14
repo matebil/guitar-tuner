@@ -7,7 +7,7 @@ const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 
  * @param {number} maxFret - Maximum fret to generate (default 14)
  * @returns {array} - Array of all fret positions with frequencies
  */
-function generateFretPositions(openString, maxFret = 14) {
+function generateFretPositions(openString, maxFret = 24) {
   const positions = [];
   const semitoneRatio = Math.pow(2, 1/12);
   
