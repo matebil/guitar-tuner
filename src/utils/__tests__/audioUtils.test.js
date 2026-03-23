@@ -42,13 +42,13 @@ describe('audioUtils', () => {
 
   describe('findClosestString', () => {
     const testTuning = {
-      strings: [
-        { name: 'E', note: 'E2', frequency: 82.41, stringNumber: 6 },
-        { name: 'A', note: 'A2', frequency: 110.00, stringNumber: 5 },
-        { name: 'D', note: 'D3', frequency: 146.83, stringNumber: 4 },
-        { name: 'G', note: 'G3', frequency: 196.00, stringNumber: 3 },
-        { name: 'B', note: 'B3', frequency: 246.94, stringNumber: 2 },
-        { name: 'E', note: 'E4', frequency: 329.63, stringNumber: 1 },
+      allPositions: [
+        { name: 'E', note: 'E2', frequency: 82.41, stringNumber: 6, fret: 0 },
+        { name: 'A', note: 'A2', frequency: 110.00, stringNumber: 5, fret: 0 },
+        { name: 'D', note: 'D3', frequency: 146.83, stringNumber: 4, fret: 0 },
+        { name: 'G', note: 'G3', frequency: 196.00, stringNumber: 3, fret: 0 },
+        { name: 'B', note: 'B3', frequency: 246.94, stringNumber: 2, fret: 0 },
+        { name: 'E', note: 'E4', frequency: 329.63, stringNumber: 1, fret: 0 },
       ]
     };
 

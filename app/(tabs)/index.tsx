@@ -455,14 +455,14 @@ export default function HomeScreen() {
               <View style={{ alignItems: 'center' }}>
                 <Text style={{ color: colors.textSecondary, fontSize: 10, letterSpacing: 1, fontFamily: 'monospace', textTransform: 'uppercase' }}>Target</Text>
                 <Text style={{ color: colors.text, fontSize: 14, fontFamily: 'monospace', fontWeight: '600' }}>
-                  {detectionData.targetFrequency?.toFixed(2) ?? '—'} <Text style={{ fontSize: 11, color: colors.textSecondary }}>Hz</Text>
+                  {detectionData.targetFrequency ? (detectionData.targetFrequency as unknown as number).toFixed(2) : '—'} <Text style={{ fontSize: 11, color: colors.textSecondary }}>Hz</Text>
                 </Text>
               </View>
               <View style={{ width: 1, backgroundColor: colors.buttonBorder, marginVertical: 2 }} />
               <View style={{ alignItems: 'center' }}>
                 <Text style={{ color: colors.textSecondary, fontSize: 10, letterSpacing: 1, fontFamily: 'monospace', textTransform: 'uppercase' }}>Detected</Text>
                 <Text style={{ color: colors.text, fontSize: 14, fontFamily: 'monospace', fontWeight: '600' }}>
-                  {detectionData.frequency.toFixed(2)} <Text style={{ fontSize: 11, color: colors.textSecondary }}>Hz</Text>
+                  {(detectionData.frequency as number).toFixed(2)} <Text style={{ fontSize: 11, color: colors.textSecondary }}>Hz</Text>
                 </Text>
               </View>
             </View>

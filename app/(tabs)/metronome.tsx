@@ -121,7 +121,7 @@ export default function MetronomeScreen() {
       const delay = nextBeatTimeRef.current - performance.now();
       
       // Always schedule next beat with calculated delay
-      intervalRef.current = setTimeout(tick, Math.max(0, delay));
+      intervalRef.current = setTimeout(tick, Math.max(0, delay)) as any;
     };
 
     tick(); // Start immediately
