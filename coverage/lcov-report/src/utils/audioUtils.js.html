@@ -23,30 +23,30 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">62.85% </span>
+                <span class="strong">100% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>22/35</span>
+                <span class='fraction'>35/35</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">68.18% </span>
+                <span class="strong">95.45% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>15/22</span>
+                <span class='fraction'>21/22</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">83.33% </span>
+                <span class="strong">100% </span>
                 <span class="quiet">Functions</span>
-                <span class='fraction'>5/6</span>
+                <span class='fraction'>6/6</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">53.57% </span>
+                <span class="strong">100% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>15/28</span>
+                <span class='fraction'>28/28</span>
             </div>
         
             
@@ -61,7 +61,7 @@
             </div>
         </template>
     </div>
-    <div class='status-line medium'></div>
+    <div class='status-line high'></div>
     <pre><table class="coverage">
 <tr><td class="line-count quiet"><a name='L1'></a><a href='#L1'>1</a>
 <a name='L2'></a><a href='#L2'>2</a>
@@ -157,34 +157,34 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">16x</span>
+<span class="cline-any cline-yes">21x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">18x</span>
+<span class="cline-any cline-yes">18x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">18x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">108x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">108x</span>
+<span class="cline-any cline-yes">15x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">15x</span>
+<span class="cline-any cline-yes">15x</span>
+<span class="cline-any cline-yes">15x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">18x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -244,26 +244,26 @@
  * @returns {object} - Matched string info or null
  */
 export function findClosestString(frequency, tuning) {
-  <span class="missing-if-branch" title="else path not taken" >E</span>if (!frequency || !tuning?.allPositions) return null;
+  if (!frequency || !tuning?.allPositions) return null;
 &nbsp;
-  let bestMatch = <span class="cstat-no" title="statement not covered" >null;</span>
-  let minDistance = <span class="cstat-no" title="statement not covered" >Infinity;</span>
+  let bestMatch = null;
+  let minDistance = Infinity;
 &nbsp;
   // Search through all fret positions (0-14 on all strings)
-<span class="cstat-no" title="statement not covered" >  tuning.allPositions.forEach(<span class="fstat-no" title="function not covered" >(p</span>osition) =&gt; {</span>
+  tuning.allPositions.forEach((position) =&gt; {
     // Calculate frequency range for this position (±100 cents = 1 semitone)
-    const semitoneRatio = <span class="cstat-no" title="statement not covered" >Math.pow(2, 1/12);</span>
-    const centsRange = <span class="cstat-no" title="statement not covered" >1.0;</span> // ±100 cents = 1 full semitone
-    const lowerBound = <span class="cstat-no" title="statement not covered" >position.frequency / Math.pow(semitoneRatio, centsRange);</span>
-    const upperBound = <span class="cstat-no" title="statement not covered" >position.frequency * Math.pow(semitoneRatio, centsRange);</span>
+    const semitoneRatio = Math.pow(2, 1/12);
+    const centsRange = 1.0; // ±100 cents = 1 full semitone
+    const lowerBound = position.frequency / Math.pow(semitoneRatio, centsRange);
+    const upperBound = position.frequency * Math.pow(semitoneRatio, centsRange);
     
     // Check if frequency falls within this position's range
-<span class="cstat-no" title="statement not covered" >    if (frequency &gt;= lowerBound &amp;&amp; frequency &lt;= upperBound) {</span>
-      const distance = <span class="cstat-no" title="statement not covered" >Math.abs(frequency - position.frequency);</span>
+    if (frequency &gt;= lowerBound &amp;&amp; frequency &lt;= upperBound) {
+      const distance = Math.abs(frequency - position.frequency);
       
-<span class="cstat-no" title="statement not covered" >      if (distance &lt; minDistance) {</span>
-<span class="cstat-no" title="statement not covered" >        minDistance = distance;</span>
-<span class="cstat-no" title="statement not covered" >        bestMatch = {</span>
+      <span class="missing-if-branch" title="else path not taken" >E</span>if (distance &lt; minDistance) {
+        minDistance = distance;
+        bestMatch = {
           ...position,
           targetFrequency: position.frequency,
         };
@@ -271,7 +271,7 @@ export function findClosestString(frequency, tuning) {
     }
   });
 &nbsp;
-<span class="cstat-no" title="statement not covered" >  return bestMatch;</span>
+  return bestMatch;
 }
 &nbsp;
 /**
@@ -331,7 +331,7 @@ export function getStatusText(centsOff) {
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-03-23T18:31:32.089Z
+                at 2026-03-23T18:32:42.612Z
             </div>
         <script src="../../prettify.js"></script>
         <script>
