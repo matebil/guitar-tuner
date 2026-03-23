@@ -9,6 +9,10 @@ import {
   MODES,
   ROOT_DISPLAY,
   ROOT_NOTES,
+  getDiatonicChords,
+  getPentatonicNoteNames,
+  getPentatonicPattern,
+  getRootNoteDisplay,
   getScaleNoteNames,
   getScaleNotes,
   getThreeNotesPerString,
@@ -25,8 +29,8 @@ import {
   Animated,
   AppState,
   PanResponder,
+  Platform,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -273,6 +277,8 @@ export default function ScalesScreen() {
   const [rootNote, setRootNote] = useState('A');
   const [modeKey, setModeKey] = useState('ionian');
   const [showModeGuide, setShowModeGuide] = useState(false);
+  const [selectedChordIdx, setSelectedChordIdx] = useState(0);
+  const [practiceType, setPracticeType] = useState<'modes' | 'pentatonics'>('modes');
 
   // Estado de audio / detección
   const [isListening, setIsListening] = useState(true);
@@ -291,7 +297,7 @@ export default function ScalesScreen() {
 
   // Load last mode on mount
   useEffect(() => {
-    AsyncStorage.multiGet(['practiceScreenMode', 'practiceRootNote', 'practiceModeKey']).then((pairs) => {
+    AsyncStorage.multiGet(['practiceScreenMode', 'practiceRootNote', 'practiceModeKey', 'practiceType']).then((pairs) => {
       const map = Object.fromEntries(pairs.map(([k, v]) => [k, v]));
       if (map.practiceScreenMode === 'guide' || map.practiceScreenMode === 'quiz' || map.practiceScreenMode === 'practice') {
         setScreenMode(map.practiceScreenMode);
@@ -299,6 +305,7 @@ export default function ScalesScreen() {
       }
       if (map.practiceRootNote) setRootNote(map.practiceRootNote);
       if (map.practiceModeKey) setModeKey(map.practiceModeKey);
+      if (map.practiceType === 'modes' || map.practiceType === 'pentatonics') setPracticeType(map.practiceType);
     }).catch(() => {});
   }, []);
 
@@ -312,6 +319,9 @@ export default function ScalesScreen() {
   useEffect(() => {
     AsyncStorage.setItem('practiceModeKey', modeKey).catch(() => {});
   }, [modeKey]);
+  useEffect(() => {
+    AsyncStorage.setItem('practiceType', practiceType).catch(() => {});
+  }, [practiceType]);
 
   // challenge: el reto actual
   const [challenge, setChallenge] = useState<ChallengeType | null>(null);
@@ -388,6 +398,19 @@ export default function ScalesScreen() {
   const scaleNotes = getScaleNotes(rootNote, modeKey);
   const scaleNoteNames = getScaleNoteNames(rootNote, modeKey);
   const pattern = getThreeNotesPerString(rootNote, modeKey);
+  const diatonicChords = getDiatonicChords(rootNote, modeKey);
+  const parentDisplayRootIdx = (NOTE_CHROMA_MAP[rootNote] - MODE_SEMITONE_OFFSET[modeKey] + 12) % 12;
+  const selectedChord = diatonicChords[selectedChordIdx] ?? diatonicChords[0];
+  const activePentatonicNoteNames = selectedChord
+    ? getPentatonicNoteNames(selectedChord.rootIdx, selectedChord.pentatonicType, parentDisplayRootIdx)
+    : [];
+  const activePentatonicNoteIndices = activePentatonicNoteNames
+    .map((name: string) => NOTE_CHROMA_MAP[name])
+    .filter((idx: number | undefined): idx is number => idx !== undefined);
+  const activePracticeNoteIndices =
+    screenMode === 'practice' && practiceType === 'pentatonics'
+      ? activePentatonicNoteIndices
+      : scaleNotes;
 
   // ── Ref para ciclar modos (evita closures obsoletos en PanResponder) ──────
   const cycleParentModeRef = useRef<(dir: 1 | -1) => void>(() => {});
@@ -428,7 +451,12 @@ export default function ScalesScreen() {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
       if (!isFocusedRef.current) return;
-      if (nextState === 'background' || nextState === 'inactive') {
+      // On Android, "inactive" can fire during UI transitions and causes
+      // unnecessary recorder restarts.
+      const shouldPause = Platform.OS === 'android'
+        ? nextState === 'background'
+        : nextState === 'background' || nextState === 'inactive';
+      if (shouldPause) {
         setIsListening(false);
       } else if (nextState === 'active') {
         setIsListening(true);
@@ -690,7 +718,7 @@ export default function ScalesScreen() {
 
   // ── Análisis de la nota detectada (con tolerancia de ±50 cents) ─────────
   const { inScale: detectedInScale, degreeIdx: detectedDegree } = detectionData.frequency
-    ? getScaleInfo(detectionData.frequency, scaleNotes, settings.referencePitch)
+    ? getScaleInfo(detectionData.frequency, activePracticeNoteIndices, settings.referencePitch)
     : { inScale: false, degreeIdx: -1 };
 
   // ── Índice cromático de la nota detectada (para iluminar el mástil) ──────
@@ -735,7 +763,6 @@ export default function ScalesScreen() {
   // ─── Render ──────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-      <StatusBar barStyle="light-content" />
       <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
 
         {/* ── Cabecera ── */}
@@ -808,7 +835,7 @@ export default function ScalesScreen() {
                 <Text style={[styles.chevronText, { color: colors.primary }]}>‹</Text>
               </TouchableOpacity>
               <Text style={[styles.cyclerValue, { color: colors.text }]}>
-                {ROOT_DISPLAY[ROOT_NOTES.indexOf(rootNote)]}
+                {getRootNoteDisplay(rootNote, modeKey)}
               </Text>
               <TouchableOpacity
                 style={styles.chevronBtn}
@@ -850,7 +877,7 @@ export default function ScalesScreen() {
           {...modePanResponder.panHandlers}
         >
           <Text style={[styles.modeTitle, { color: colors.primary }]}>
-            {mode.emoji}  {ROOT_DISPLAY[ROOT_NOTES.indexOf(rootNote)]} {mode.name}
+            {mode.emoji}  {getRootNoteDisplay(rootNote, modeKey)} {mode.name}
             <Text style={[styles.modeDegree, { color: colors.textSecondary }]}>
               {'  '}(Degree {mode.degree})
             </Text>
@@ -935,6 +962,29 @@ export default function ScalesScreen() {
         </>)}
         {/* ══════════ MODO PRACTICE ══════════ */}
         {screenMode === 'practice' && (<>
+
+        {/* ── Sub-toggle: Modes / Pentatonics ── */}
+        <View style={[styles.modeToggle, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder, marginTop: 6 }]}>
+          <TouchableOpacity
+            style={[styles.toggleBtn, practiceType === 'modes' && { backgroundColor: colors.primary }]}
+            onPress={() => setPracticeType('modes')}
+          >
+            <Text style={[styles.toggleText, { color: practiceType === 'modes' ? colors.textOnPrimary : colors.textSecondary }]}>
+              Modes
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.toggleBtn, practiceType === 'pentatonics' && { backgroundColor: colors.primary }]}
+            onPress={() => setPracticeType('pentatonics')}
+          >
+            <Text style={[styles.toggleText, { color: practiceType === 'pentatonics' ? colors.textOnPrimary : colors.textSecondary }]}>
+              Pentatonics
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── Contenido Modes ── */}
+        {practiceType === 'modes' && (<>
 
         {/* ── Sección: 3 notas por cuerda ── */}
         <View style={styles.sectionHeader}>
@@ -1071,6 +1121,210 @@ export default function ScalesScreen() {
           </View>
         </View>
 
+        </>)}
+        {/* ── Fin contenido Modes ── */}
+
+        {/* ── Contenido Pentatonics ── */}
+        {practiceType === 'pentatonics' && (<>
+
+        {/* ── Sección: Pentatónica por Acorde ── */}
+        <View style={styles.sectionHeader}>
+          <View style={[styles.sectionLine, { backgroundColor: colors.buttonBorder }]} />
+          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+            CHORD PENTATONICS
+          </Text>
+          <View style={[styles.sectionLine, { backgroundColor: colors.buttonBorder }]} />
+        </View>
+
+        {/* Chord chips */}
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16, gap: 6, marginBottom: 8 }}>
+          {diatonicChords.map((chord: any, idx: number) => (
+            <TouchableOpacity
+              key={idx}
+              onPress={() => setSelectedChordIdx(idx)}
+              style={[
+                styles.noteChip,
+                {
+                  backgroundColor: selectedChordIdx === idx ? colors.primary : colors.buttonBg,
+                  borderColor: selectedChordIdx === idx ? colors.primaryBorder : colors.buttonBorder,
+                },
+              ]}
+            >
+              <Text style={[
+                styles.noteChipText,
+                { color: selectedChordIdx === idx ? colors.textOnPrimary : colors.text },
+              ]}>
+                {chord.roman}{'\u00B7'}{chord.name}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Selected chord pentatonic info + fretboard */}
+        {(() => {
+          const chord = selectedChord;
+          const pentPattern = getPentatonicPattern(chord.rootIdx, chord.pentatonicType, parentDisplayRootIdx);
+          const pentNoteNames = getPentatonicNoteNames(chord.rootIdx, chord.pentatonicType, parentDisplayRootIdx);
+          const pentNoteIdxSet = new Set(
+            pentNoteNames
+              .map((name: string) => NOTE_CHROMA_MAP[name])
+              .filter((idx: number | undefined): idx is number => idx !== undefined)
+          );
+          const pentDisplay = [...pentPattern].reverse();
+          const pentFrets = pentPattern.flatMap((s: any) => s.notes.map((n: any) => n.fret));
+          const pentMinFret = Math.max(0, Math.min(...pentFrets) - 1);
+          const pentMaxFret = Math.max(...pentFrets) + 1;
+          const pentFretRange = Array.from({ length: pentMaxFret - pentMinFret + 1 }, (_, i) => pentMinFret + i);
+
+          return (
+            <>
+              <View style={[styles.modeCard, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder }]}>
+                <Text style={[styles.modeTitle, { color: colors.primary }]}>
+                  {chord.name} {'\u2192'} {chord.pentatonicLabel}
+                </Text>
+                <View style={styles.noteChips}>
+                  {pentNoteNames.map((name: string, idx: number) => (
+                    <View
+                      key={idx}
+                      style={[
+                        styles.noteChip,
+                        {
+                          backgroundColor: idx === 0 ? colors.primary : colors.buttonBg,
+                          borderColor: idx === 0 ? colors.primaryBorder : colors.buttonBorder,
+                        },
+                      ]}
+                    >
+                      <Text style={[
+                        styles.noteChipText,
+                        { color: idx === 0 ? colors.textOnPrimary : colors.text },
+                      ]}>
+                        {name}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+
+              {/* Pentatonic fretboard */}
+              <View style={styles.fretboard}>
+                <View style={{ flexDirection: 'row', marginBottom: 3 }}>
+                  <View style={{ width: LABEL_WIDTH }} />
+                  {pentFretRange.map((f) => (
+                    <View key={f} style={{ width: FRET_WIDTH, alignItems: 'center' }}>
+                      <Text style={[styles.fretNum, { color: colors.textSecondary }]}>
+                        {f === 0 ? '\u25CB' : f}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+
+                {pentDisplay.map((string: any, displayIdx: number) => (
+                  <View
+                    key={string.stringNumber}
+                    style={{ flexDirection: 'row', alignItems: 'center', height: STRING_HEIGHT }}
+                  >
+                    <View style={{ width: LABEL_WIDTH, alignItems: 'center' }}>
+                      <Text style={[styles.stringLabel, { color: colors.textSecondary }]}>
+                        {STRING_LABELS[displayIdx]}
+                      </Text>
+                    </View>
+                    {pentFretRange.map((f) => {
+                      const note = string.notes.find((n: any) => n.fret === f);
+                      const isNut = f === 0;
+                      return (
+                        <View
+                          key={f}
+                          style={{
+                            width: FRET_WIDTH,
+                            height: STRING_HEIGHT,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            borderLeftWidth: isNut ? 3 : 1,
+                            borderLeftColor: isNut ? colors.text : colors.buttonBorder,
+                          }}
+                        >
+                          <View
+                            style={{
+                              position: 'absolute',
+                              left: 0,
+                              right: 0,
+                              height: 1.5,
+                              backgroundColor: colors.buttonBorder,
+                              opacity: 0.8,
+                            }}
+                          />
+                          {note && (() => {
+                            const noteIdx = NOTE_CHROMA_MAP[note.noteName] ?? -1;
+                            const isPlayed = playedNoteIdx !== -1 && noteIdx === playedNoteIdx;
+                            const isInPentatonic = isPlayed ? pentNoteIdxSet.has(playedNoteIdx) : true;
+                            return (
+                            <Animated.View
+                              style={{
+                                width: DOT_SIZE,
+                                height: DOT_SIZE,
+                                borderRadius: DOT_SIZE / 2,
+                                backgroundColor: isPlayed
+                                  ? (isInPentatonic ? '#22c55e' : colors.sharp)
+                                  : (note.isRoot ? colors.primary : colors.secondary),
+                                borderWidth: isPlayed ? 2.5 : (note.isRoot ? 2 : 1),
+                                borderColor: isPlayed
+                                  ? (isInPentatonic ? '#16a34a' : colors.sharp)
+                                  : (note.isRoot ? colors.primaryBorder : colors.buttonBorder),
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                zIndex: 1,
+                                opacity: isPlayed ? pulseAnim : 1,
+                                transform: isPlayed ? [{ scale: pulseAnim.interpolate({
+                                  inputRange: [0.45, 1],
+                                  outputRange: [1, 1.22],
+                                }) }] : [],
+                              }}
+                            >
+                              <Text
+                                style={{
+                                  color: isPlayed ? '#fff' : (note.isRoot ? colors.textOnPrimary : colors.text),
+                                  fontSize: note.noteName.length > 2 ? 7 : 9,
+                                  fontWeight: 'bold',
+                                  fontFamily: 'monospace',
+                                }}
+                              >
+                                {note.noteName}
+                              </Text>
+                            </Animated.View>
+                            );
+                          })()}
+                        </View>
+                      );
+                    })}
+                  </View>
+                ))}
+
+                <View style={{ flexDirection: 'row', marginTop: 5 }}>
+                  <View style={{ width: LABEL_WIDTH }} />
+                  {pentFretRange.map((f) => (
+                    <View key={f} style={{ width: FRET_WIDTH, alignItems: 'center' }}>
+                      {[3, 5, 7, 9, 12].includes(f) ? (
+                        <View
+                          style={{
+                            width: 5,
+                            height: 5,
+                            borderRadius: 2.5,
+                            backgroundColor: colors.textSecondary,
+                            opacity: 0.4,
+                          }}
+                        />
+                      ) : null}
+                    </View>
+                  ))}
+                </View>
+              </View>
+            </>
+          );
+        })()}
+
+        </>)}
+        {/* ── Fin contenido Pentatonics ── */}
+
         {/* ── Sección: Detector en vivo ── */}
         <View style={styles.sectionHeader}>
           <View style={[styles.sectionLine, { backgroundColor: colors.buttonBorder }]} />
@@ -1114,8 +1368,10 @@ export default function ScalesScreen() {
                   }}
                 >
                   {detectedInScale
-                    ? `✓  In scale  ·  ${DEGREE_NAMES[detectedDegree]} (${ROMAN[detectedDegree]})`
-                    : '✗  Out of scale'}
+                    ? (practiceType === 'pentatonics'
+                      ? '✓  In pentatonic'
+                      : `✓  In scale  ·  ${DEGREE_NAMES[detectedDegree]} (${ROMAN[detectedDegree]})`)
+                    : (practiceType === 'pentatonics' ? '✗  Out of pentatonic' : '✗  Out of scale')}
                 </Text>
               </Animated.View>
             </>
@@ -1183,7 +1439,7 @@ export default function ScalesScreen() {
               Scale complete!
             </Text>
             <Text style={[styles.guideCompleteSub, { color: colors.textSecondary }]}>
-              {ROOT_DISPLAY[ROOT_NOTES.indexOf(rootNote)]} {mode.name} · 18 notes
+              {getRootNoteDisplay(rootNote, modeKey)} {mode.name} · 18 notes
             </Text>
             <TouchableOpacity
               style={[styles.nextBtn, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder, marginHorizontal: 0, marginTop: 16, alignSelf: 'stretch' }]}
@@ -1519,7 +1775,7 @@ export default function ScalesScreen() {
               <TouchableOpacity style={styles.chevronBtn} onPress={() => setRootNote(cyclePrev(ROOT_NOTES, rootNote))}>
                 <Text style={[styles.chevronText, { color: colors.primary }]}>‹</Text>
               </TouchableOpacity>
-              <Text style={[styles.cyclerValue, { color: colors.text }]}>{ROOT_DISPLAY[ROOT_NOTES.indexOf(rootNote)]}</Text>
+              <Text style={[styles.cyclerValue, { color: colors.text }]}>{getRootNoteDisplay(rootNote, modeKey)}</Text>
               <TouchableOpacity style={styles.chevronBtn} onPress={() => setRootNote(cycleNext(ROOT_NOTES, rootNote))}>
                 <Text style={[styles.chevronText, { color: colors.primary }]}>›</Text>
               </TouchableOpacity>

@@ -25,14 +25,14 @@ const MIN_BAR_H       = 28;           // edge bar height
 const STABILITY_N     = 8;
 const STABILITY_CENTS = 4;
 
-export default function TuningBar({ centsOff = 0, isActive = false, noteName = null, colors }) {
+export default function TuningBar({ centsOff = 0, isActive = false, noteName = null, colors, inTuneThreshold = 4 }) {
   const blinkAnim  = useRef(new Animated.Value(1)).current;
   const blinkLoop  = useRef(null);
   const historyRef = useRef([]);
   const [isStable, setIsStable] = useState(false);
 
   // Compute these early so useEffects below can reference them
-  const isInTune   = isActive && Math.abs(centsOff) <= 4;
+  const isInTune   = isActive && Math.abs(centsOff) <= inTuneThreshold;
   const activeBars = isInTune ? 0 : Math.round((Math.abs(centsOff) / MAX_CENTS) * CENTER);
 
   // ── Stability tracking ─────────────────────────────────────────────────

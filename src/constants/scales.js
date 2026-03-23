@@ -19,6 +19,22 @@ function noteDisplay(noteIdx, rootIdx) {
     : NOTE_SHARP_DISPLAY[noteIdx];
 }
 
+// Returns the parent major scale root index from a modal root + modeKey.
+// e.g. G# Locrian (offset 11) → parentRootIdx = (8 - 11 + 12) % 12 = 9 = A
+function getParentRootIdx(rootNote, modeKey) {
+  const rootIdx = NOTE_NAMES.indexOf(rootNote);
+  return (rootIdx - MODE_DEGREE_OFFSET[modeKey] + 12) % 12;
+}
+
+// Returns the correctly-spelled display name for a modal root.
+// Uses the PARENT major key's sharp/flat preference, not the modal root itself.
+// e.g. G# Locrian → parent = A major (sharp key) → 'G#' not 'Ab'
+export function getRootNoteDisplay(rootNote, modeKey) {
+  const rootIdx = NOTE_NAMES.indexOf(rootNote);
+  const parentRootIdx = getParentRootIdx(rootNote, modeKey);
+  return noteDisplay(rootIdx, parentRootIdx);
+}
+
 // Para ROOT_DISPLAY seguimos usando la mezcla habitual (solo para el selector de raíz)
 const NOTE_DISPLAY = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
 
@@ -113,8 +129,8 @@ export function getScaleNotes(rootNote, modeKey) {
  * Ej: getScaleNoteNames('A', 'dorian') → ['A', 'B', 'C', 'D', 'E', 'F#', 'G']
  */
 export function getScaleNoteNames(rootNote, modeKey) {
-  const rootIdx = NOTE_NAMES.indexOf(rootNote);
-  return getScaleNotes(rootNote, modeKey).map(idx => noteDisplay(idx, rootIdx));
+  const parentRootIdx = getParentRootIdx(rootNote, modeKey);
+  return getScaleNotes(rootNote, modeKey).map(idx => noteDisplay(idx, parentRootIdx));
 }
 
 /**
@@ -149,6 +165,7 @@ const MODE_DEGREE_OFFSET = {
 export function getThreeNotesPerString(rootNote, modeKey) {
   const mode = MODES[modeKey];
   const rootIdx = NOTE_NAMES.indexOf(rootNote);
+  const parentRootIdx = getParentRootIdx(rootNote, modeKey);
   const scaleNoteIndices = mode.intervals.map(i => (rootIdx + i) % 12);
 
   // ── Anchor: find the MODAL ROOT on string 6 (low E, MIDI 40) ───────────
@@ -181,7 +198,7 @@ export function getThreeNotesPerString(rootNote, modeKey) {
       if (scaleNoteIndices.includes(noteIdx)) {
         stringNotes.push({
           fret,
-          noteName: noteDisplay(noteIdx, rootIdx),
+          noteName: noteDisplay(noteIdx, parentRootIdx),
           noteNameSharp: NOTE_NAMES[noteIdx],
           isRoot: noteIdx === rootIdx,
           degree: scaleNoteIndices.indexOf(noteIdx) + 1, // 1-indexed
@@ -193,6 +210,125 @@ export function getThreeNotesPerString(rootNote, modeKey) {
 
     result.push({
       stringNumber: 6 - strIdx, // 6, 5, 4, 3, 2, 1
+      notes: stringNotes,
+    });
+  }
+
+  return result;
+}
+
+// ── Pentatonic & Diatonic Chords ─────────────────────────────────────────────
+
+const PENTATONIC_INTERVALS = {
+  major: [0, 2, 4, 7, 9],
+  minor: [0, 3, 5, 7, 10],
+};
+
+/**
+ * Returns the diatonic chords for a given scale (root + mode).
+ * Each chord includes its roman numeral, quality, and suggested pentatonic type.
+ */
+export function getDiatonicChords(rootNote, modeKey) {
+  const mode = MODES[modeKey];
+  const rootIdx = NOTE_NAMES.indexOf(rootNote);
+  const parentRootIdx = getParentRootIdx(rootNote, modeKey);
+  const intervals = mode.intervals;
+  const romanNumerals = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
+
+  return intervals.map((_, i) => {
+    const chordRootSemitone = intervals[i];
+    const chordRootIdx = (rootIdx + chordRootSemitone) % 12;
+
+    const thirdInterval = (intervals[(i + 2) % 7] - chordRootSemitone + 12) % 12;
+    const fifthInterval = (intervals[(i + 4) % 7] - chordRootSemitone + 12) % 12;
+
+    let quality, symbol, pentatonicType;
+    if (thirdInterval === 4 && fifthInterval === 7) {
+      quality = 'major'; symbol = ''; pentatonicType = 'major';
+    } else if (thirdInterval === 3 && fifthInterval === 7) {
+      quality = 'minor'; symbol = 'm'; pentatonicType = 'minor';
+    } else if (thirdInterval === 3 && fifthInterval === 6) {
+      quality = 'dim'; symbol = '°'; pentatonicType = 'minor';
+    } else {
+      quality = 'aug'; symbol = '+'; pentatonicType = 'major';
+    }
+
+    const roman = (quality === 'minor' || quality === 'dim')
+      ? romanNumerals[i].toLowerCase() + (quality === 'dim' ? '°' : '')
+      : romanNumerals[i] + (quality === 'aug' ? '+' : '');
+
+    const chordName = noteDisplay(chordRootIdx, parentRootIdx);
+    const pentLabel = pentatonicType === 'major' ? 'Maj' : 'Min';
+
+    return {
+      degree: i + 1,
+      roman,
+      rootIdx: chordRootIdx,
+      rootName: chordName,
+      quality,
+      symbol,
+      name: chordName + symbol,
+      pentatonicType,
+      pentatonicLabel: `${chordName} ${pentLabel} Pentatonic`,
+    };
+  });
+}
+
+/**
+ * Returns note display names for a pentatonic scale.
+ * @param {number} chordRootIdx  Chromatic index (0-11) of the pentatonic root
+ * @param {string} pentatonicType 'major' or 'minor'
+ * @param {number} displayRootIdx Parent key root index for sharp/flat spelling
+ */
+export function getPentatonicNoteNames(chordRootIdx, pentatonicType, displayRootIdx) {
+  const intervals = PENTATONIC_INTERVALS[pentatonicType];
+  return intervals.map(i => noteDisplay((chordRootIdx + i) % 12, displayRootIdx));
+}
+
+/**
+ * Returns a 2-notes-per-string fretboard pattern for a pentatonic scale.
+ * @param {number} chordRootIdx  Chromatic index (0-11) of the pentatonic root
+ * @param {string} pentatonicType 'major' or 'minor'
+ * @param {number} displayRootIdx Parent key root index for sharp/flat spelling
+ */
+export function getPentatonicPattern(chordRootIdx, pentatonicType, displayRootIdx) {
+  const intervals = PENTATONIC_INTERVALS[pentatonicType];
+  const pentatonicNotes = intervals.map(i => (chordRootIdx + i) % 12);
+
+  let modalFretString6 = 0;
+  for (let f = 0; f <= 11; f++) {
+    if ((STRING_MIDI[0] + f) % 12 === chordRootIdx) {
+      modalFretString6 = f;
+      break;
+    }
+  }
+
+  const result = [];
+  let lastAbsMidi = STRING_MIDI[0] + modalFretString6 - 1;
+
+  for (let strIdx = 0; strIdx < 6; strIdx++) {
+    const stringMidi = STRING_MIDI[strIdx];
+    const stringNotes = [];
+    const startFret = Math.max(0, lastAbsMidi + 1 - stringMidi);
+
+    let fret = startFret;
+    while (stringNotes.length < 2 && fret <= startFret + 16) {
+      const noteIdx = (stringMidi + fret) % 12;
+      if (pentatonicNotes.includes(noteIdx)) {
+        stringNotes.push({
+          fret,
+          noteName: noteDisplay(noteIdx, displayRootIdx),
+          noteNameSharp: NOTE_NAMES[noteIdx],
+          isRoot: noteIdx === chordRootIdx,
+          degree: pentatonicNotes.indexOf(noteIdx) + 1,
+        });
+        lastAbsMidi = stringMidi + fret;
+      }
+      fret++;
+    }
+
+    result.push({
+      stringNumber: 6 - strIdx,
       notes: stringNotes,
     });
   }

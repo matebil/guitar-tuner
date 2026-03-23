@@ -6,18 +6,25 @@
  */
 
 import { ExpoAudioStreamModule } from '@siteed/expo-audio-studio';
-import { requestRecordingPermissionsAsync, setAudioModeAsync } from 'expo-audio';
-import { File } from 'expo-file-system/next';
+import {
+  getRecordingPermissionsAsync,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+} from 'expo-audio';
 import Pitchfinder from 'pitchfinder';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
+import { Platform } from 'react-native';
 import { calculateCents } from '../utils/audioUtils';
 import { logger } from '../utils/logger';
 
 const SAMPLE_RATE = 44100;
 const BUFFER_SIZE = 4096;
+const ANDROID_SAMPLE_RATE = 16000;
+const ANDROID_BUFFER_SIZE = 1536;
 const MIN_FREQUENCY = 60;
 const MAX_FREQUENCY = 1400; // Full guitar range: low E2 (82 Hz) to high e fret 24 (1318 Hz)
 const INPUT_GAIN  = 6;         // Pre-gain boost — makes acoustic/unplugged guitar as readable as Guitar Tuna
+const INPUT_GAIN_ANDROID = 6;  // Keep Android gain moderate to avoid clipping and YIN failures
 const MEDIAN_WIN = 3;          // minimal window — just kills single-sample spikes without freezing
 const MEDIAN_MIN_FILL = 1;    // report on first valid pitch reading — no need to wait for 2
 const ONSET_RMS_RATIO = 2.5;  // RMS jump ratio that marks a new pluck
@@ -31,6 +38,9 @@ const SILENCE_RMS     = 0.012;  // hard silence gate — clears true silence & m
 const FADE_RMS        = 0.028;  // dying-note zone — above ambient, below fading guitar
 const FADE_RESET_RMS  = 0.060;  // only reset fade counter if signal this strong (genuine new note)
 const FADE_COUNT      = 2;      // buffers without strong signal before clearing (~140 ms)
+const ANDROID_SILENCE_RMS = 0.0035;
+const ANDROID_FADE_RMS = 0.010;
+const ANDROID_FADE_RESET_RMS = 0.025;
 
 /**
  * Sub-sample autocorrelation refinement.
@@ -85,15 +95,20 @@ export default function FrequencyDetector({
 }) {
   const detectPitch = useRef(null);
   const audioBuffer = useRef([]);
-  const [streamUuid, setStreamUuid] = useState(null);
   const startTimeRef = useRef(null);
   const firstEventRef = useRef(false);
   const firstDetectionRef = useRef(false);
+  const lastReportedCentsRef = useRef(null);
+  const lastReportedFrequencyRef = useRef(null);
+  const lastLockedStringRef = useRef(null);
   const smoothedFrequencyRef = useRef(null);
   const medianBufferRef = useRef([]);
   const prevRmsRef = useRef(0);
   const onsetSuppressRef = useRef(0);
   const fadeCountRef = useRef(0);
+  const sampleRateRef = useRef(SAMPLE_RATE);
+  const bufferSizeRef = useRef(BUFFER_SIZE);
+  const bufferEvalCountRef = useRef(0);
   
   // Use refs to keep values current without restarting the audio stream
   const modeRef = useRef(mode);
@@ -125,8 +140,9 @@ export default function FrequencyDetector({
 
   // Initialize pitch detection algorithm
   useEffect(() => {
+    const targetSampleRate = Platform.OS === 'android' ? ANDROID_SAMPLE_RATE : SAMPLE_RATE;
     detectPitch.current = Pitchfinder.YIN({
-      sampleRate: SAMPLE_RATE,
+      sampleRate: targetSampleRate,
       threshold: yinThreshold,
     });
   }, [yinThreshold]);
@@ -136,7 +152,6 @@ export default function FrequencyDetector({
     if (!isActive) return;
 
     let subscription;
-    let currentStreamUuid;
     let isStreamActive = false;  // guard: tracks if OUR stream is running
     let startAborted = false;    // guard: prevents race when effect re-runs
 
@@ -150,6 +165,13 @@ export default function FrequencyDetector({
           // Attempt to stop a stale stream from a previous mount
           try { await ExpoAudioStreamModule.stopRecording(); } catch (_) {}
         }
+
+        // Delete ALL leftover .wav files from previous sessions / crashes.
+        // The library writes continuous WAV to Documents (~5 MB/min) and
+        // never cleans up automatically.  This single call prevents
+        // unbounded disk growth even after force-quits.
+        try { ExpoAudioStreamModule.clearAudioFiles(); } catch (_) {}
+
         await new Promise(resolve => setTimeout(resolve, 150));
 
         if (startAborted) return;  // effect was cleaned up while we waited
@@ -163,21 +185,45 @@ export default function FrequencyDetector({
         prevRmsRef.current = 0;
         onsetSuppressRef.current = 0;
         fadeCountRef.current = 0;
+        bufferEvalCountRef.current = 0;
 
-        const { granted } = await requestRecordingPermissionsAsync();
+        const permissionState = await getRecordingPermissionsAsync();
+        let granted = permissionState.granted;
+        if (!granted && permissionState.canAskAgain) {
+          const requested = await requestRecordingPermissionsAsync();
+          granted = requested.granted;
+        }
+        logger.info('[Tuner] Microphone permission granted:', granted, 'Platform:', Platform.OS);
         if (!granted) { logger.warn('[Tuner] Microphone permission denied'); return; }
         if (startAborted) return;
 
         await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
         if (startAborted) return;
 
-        const result = await ExpoAudioStreamModule.startRecording({
-          sampleRate: SAMPLE_RATE,
+        // On low-end Android devices the JS thread (Hermes on Helio P35 etc.)
+        // cannot keep up with 40 events/sec of atob + DSP at 25 ms interval.
+        // 100 ms emits ~4410 samples/event — enough to fill one 4096-sample
+        // buffer per callback, and leaves the JS thread breathing room.
+        const streamInterval = Platform.OS === 'android' ? 45 : 25;
+        const targetSampleRate = Platform.OS === 'android' ? ANDROID_SAMPLE_RATE : SAMPLE_RATE;
+        const targetBufferSize = Platform.OS === 'android' ? ANDROID_BUFFER_SIZE : BUFFER_SIZE;
+        logger.info('[Tuner] Starting audio stream, interval:', streamInterval, 'ms');
+        const startResult = await ExpoAudioStreamModule.startRecording({
+          sampleRate: targetSampleRate,
           channels: 1,
           encoding: 'pcm_16bit',
-          interval: 25,
+          interval: streamInterval,
           enableProcessing: false,
         });
+        const runtimeSampleRate = startResult?.sampleRate || SAMPLE_RATE;
+        sampleRateRef.current = runtimeSampleRate;
+        bufferSizeRef.current = targetBufferSize;
+        detectPitch.current = Pitchfinder.YIN({
+          sampleRate: runtimeSampleRate,
+          threshold: yinThreshold,
+        });
+        logger.info('[Tuner] Audio stream started successfully');
+        logger.info('[Tuner] Runtime stream config sampleRate:', runtimeSampleRate, 'channels:', startResult?.channels);
 
         if (startAborted) {
           // Cleanup immediately if effect was torn down during startRecording
@@ -186,11 +232,17 @@ export default function FrequencyDetector({
         }
 
         isStreamActive = true;
-        currentStreamUuid = result.fileUri;
-        setStreamUuid(result.fileUri);
 
+        let eventCount = 0;
         subscription = ExpoAudioStreamModule.addListener('AudioData', (event) => {
-          if (!event.encoded) return;
+          if (!event.encoded) {
+            if (eventCount === 0) logger.info('[Tuner] AudioData event with no encoded data');
+            return;
+          }
+          eventCount++;
+          if (eventCount <= 3 || eventCount % 300 === 0) {
+            logger.info('[Tuner] AudioData event #' + eventCount + ', encoded length:', event.encoded.length);
+          }
           try {
             const decoded = atob(event.encoded);
             const bytes = new Uint8Array(decoded.length);
@@ -199,14 +251,15 @@ export default function FrequencyDetector({
             const audioData = new Float32Array(int16Array.length);
             for (let i = 0; i < int16Array.length; i++) audioData[i] = int16Array[i] / 32768.0;
             // Boost quiet signals (acoustic/unplugged guitar) to match commercial tuner sensitivity
+            const gain = Platform.OS === 'android' ? INPUT_GAIN_ANDROID : INPUT_GAIN;
             for (let i = 0; i < audioData.length; i++) {
-              audioData[i] = audioData[i] * INPUT_GAIN;
+              audioData[i] = audioData[i] * gain;
               if (audioData[i] > 1) audioData[i] = 1;
               else if (audioData[i] < -1) audioData[i] = -1;
             }
             if (audioData.length > 0) {
               processAudioData(audioData);
-              onBufferStatus({ current: audioBuffer.current.length, needed: BUFFER_SIZE });
+              onBufferStatus({ current: audioBuffer.current.length, needed: bufferSizeRef.current });
             }
           } catch (error) {
             logger.error('[Tuner] Audio decode error:', error);
@@ -220,33 +273,38 @@ export default function FrequencyDetector({
 
     let lastFrequency = null;
     const processAudioData = (floatSamples) => {
+      const activeBufferSize = bufferSizeRef.current || BUFFER_SIZE;
       // Accumulate incoming samples
       const combined = new Float32Array(audioBuffer.current.length + floatSamples.length);
       combined.set(audioBuffer.current);
       combined.set(floatSamples, audioBuffer.current.length);
       audioBuffer.current = combined;
 
-      if (audioBuffer.current.length >= BUFFER_SIZE) {
+      if (audioBuffer.current.length >= activeBufferSize) {
         // ALWAYS take the NEWEST BUFFER_SIZE samples — prevents latency building up
         // when the JS thread falls behind (GC pause, tab switch, etc.).
         // Any samples older than BUFFER_SIZE are stale and will only add delay.
-        const isBacklogged = audioBuffer.current.length > BUFFER_SIZE;
+        const isBacklogged = audioBuffer.current.length > activeBufferSize;
         const bufferSlice = isBacklogged
-          ? audioBuffer.current.slice(-BUFFER_SIZE)
-          : audioBuffer.current.slice(0, BUFFER_SIZE);
+          ? audioBuffer.current.slice(-activeBufferSize)
+          : audioBuffer.current.slice(0, activeBufferSize);
         // When backlogged: clear completely so we catch up in one cycle.
         // When normal: keep a 25% overlap (~1024 samples) for continuity.
         audioBuffer.current = isBacklogged
           ? new Float32Array(0)
-          : audioBuffer.current.slice(-Math.floor(BUFFER_SIZE * 0.25));
+          : audioBuffer.current.slice(-Math.floor(activeBufferSize * 0.25));
         // ── Silence gate ─────────────────────────────────────────────
         let sumSq = 0;
         for (let i = 0; i < bufferSlice.length; i++) sumSq += bufferSlice[i] * bufferSlice[i];
         const rms = Math.sqrt(sumSq / bufferSlice.length);
         onSignalLevel(rms);
 
+        const silenceGate = Platform.OS === 'android' ? ANDROID_SILENCE_RMS : SILENCE_RMS;
+        const fadeGate = Platform.OS === 'android' ? ANDROID_FADE_RMS : FADE_RMS;
+        const fadeResetGate = Platform.OS === 'android' ? ANDROID_FADE_RESET_RMS : FADE_RESET_RMS;
+
         // Hard silence gate
-        if (rms < SILENCE_RMS) {
+        if (rms < silenceGate) {
           smoothedFrequencyRef.current = null;
           prevRmsRef.current = 0;
           onsetSuppressRef.current = 0;
@@ -262,11 +320,11 @@ export default function FrequencyDetector({
         // Only reset the counter when signal is clearly a new strong note (rms > FADE_RESET_RMS).
         // Bounces in the dying-note zone (FADE_RMS..FADE_RESET_RMS) intentionally do NOT reset,
         // so a decaying acoustic string clears in ~2 buffers instead of lingering for seconds.
-        if (rms >= FADE_RESET_RMS) {
+        if (rms >= fadeResetGate) {
           fadeCountRef.current = 0; // strong new note — reset
         } else {
-          // rms is below FADE_RESET_RMS (dying or silent) — always increment
-          if (rms < FADE_RMS) {
+          // rms is below fadeResetGate (dying or silent) — always increment
+          if (rms < fadeGate) {
             fadeCountRef.current++;
           }
           if (fadeCountRef.current >= FADE_COUNT) {
@@ -299,7 +357,8 @@ export default function FrequencyDetector({
         }
 
         // ── Zero-phase high-pass at 80 Hz (removes 50/60 Hz amp hum) ─
-        const K_hp = Math.tan(Math.PI * 80 / SAMPLE_RATE);
+        const runtimeSampleRate = sampleRateRef.current || SAMPLE_RATE;
+        const K_hp = Math.tan(Math.PI * 80 / runtimeSampleRate);
         const K2_hp = K_hp * K_hp, sq2K_hp = Math.SQRT2 * K_hp;
         const norm_hp = 1 / (1 + sq2K_hp + K2_hp);
         const b0_hp = norm_hp, b1_hp = -2 * norm_hp, b2_hp = norm_hp;
@@ -320,7 +379,7 @@ export default function FrequencyDetector({
         }
 
         // ── Zero-phase low-pass at 1200 Hz (kills 17 kHz YIN ghosts) ─
-        const K  = Math.tan(Math.PI * 1200 / SAMPLE_RATE);
+        const K  = Math.tan(Math.PI * 1200 / runtimeSampleRate);
         const K2 = K * K, sq2K = Math.SQRT2 * K;
         const norm = 1 / (1 + sq2K + K2);
         const b0 = K2 * norm, b1 = 2 * b0, b2 = b0;
@@ -350,7 +409,12 @@ export default function FrequencyDetector({
         // Uses the same low-passed signal YIN used — avoids sharp bias from
         // high-frequency harmonics pulling the ACF peak upward.
         if (frequency && frequency >= MIN_FREQUENCY && frequency <= MAX_FREQUENCY) {
-          frequency = refineFrequency(filtered, frequency, SAMPLE_RATE);
+          frequency = refineFrequency(filtered, frequency, runtimeSampleRate);
+        }
+
+        bufferEvalCountRef.current++;
+        if (Platform.OS === 'android' && (bufferEvalCountRef.current <= 3 || bufferEvalCountRef.current % 180 === 0)) {
+          logger.info('[Tuner] DSP rms:', Number(rms.toFixed(4)), 'gate:', silenceGate, 'freq:', frequency ? Number(frequency.toFixed(2)) : null);
         }
 
         // Sub-octave harmonic correction for low E (halve if lands in E2 territory)
@@ -390,6 +454,9 @@ export default function FrequencyDetector({
           lastFrequency = frequency;
         } else {
           lastFrequency = null;
+          lastReportedCentsRef.current = null;
+          lastReportedFrequencyRef.current = null;
+          lastLockedStringRef.current = null;
           onRawFrequency(null);
           onFrequencyDetected({ frequency: null, detectedString: null, detectedNote: null,
             stringNumber: null, targetFrequency: null, centsOff: 0 });
@@ -427,18 +494,86 @@ export default function FrequencyDetector({
       }
       
       if (!matchedString) {
+        lastReportedCentsRef.current = null;
+        lastReportedFrequencyRef.current = null;
+        lastLockedStringRef.current = null;
         // No string in range — clear the display so note doesn't stay stuck
         onFrequencyDetected({ frequency: null, detectedString: null, detectedNote: null,
           stringNumber: null, targetFrequency: null, centsOff: 0 });
         return;
       }
+
+      if (
+        Platform.OS === 'android' &&
+        matchedString.stringNumber === 1 &&
+        matchedString.targetFrequency >= 320
+      ) {
+        if (lastLockedStringRef.current !== matchedString.stringNumber) {
+          lastReportedFrequencyRef.current = frequency;
+        }
+        lastLockedStringRef.current = matchedString.stringNumber;
+
+        const prevFrequency = lastReportedFrequencyRef.current;
+        if (typeof prevFrequency === 'number' && Number.isFinite(prevFrequency)) {
+          const prevCentsToTarget = calculateCents(prevFrequency, matchedString.targetFrequency);
+          const rawCentsToTarget = calculateCents(frequency, matchedString.targetFrequency);
+          let stabilizedFrequency = frequency;
+
+          // If we're near tune and current frame jumps too far, treat it as a transient glitch.
+          if (Math.abs(prevCentsToTarget) <= 30 && Math.abs(rawCentsToTarget - prevCentsToTarget) >= 28) {
+            stabilizedFrequency = prevFrequency;
+          }
+
+          // Only clamp jumps when previous value is already in the same neighborhood.
+          if (Math.abs(prevCentsToTarget) <= 120) {
+            const maxDeltaHz = 1.2;
+            const deltaHz = stabilizedFrequency - prevFrequency;
+            if (Math.abs(deltaHz) > maxDeltaHz) {
+              stabilizedFrequency = prevFrequency + Math.sign(deltaHz) * maxDeltaHz;
+            }
+          }
+
+          frequency = (prevFrequency * 0.6) + (stabilizedFrequency * 0.4);
+        }
+
+        // Snap tiny residual wobble to target so high E can settle in green.
+        const stabilizedCents = calculateCents(frequency, matchedString.targetFrequency);
+        if (Math.abs(stabilizedCents) <= 3) {
+          frequency = matchedString.targetFrequency;
+        }
+      }
+      
+      if (lastLockedStringRef.current !== matchedString.stringNumber) {
+        lastLockedStringRef.current = matchedString.stringNumber;
+      }
+      lastReportedFrequencyRef.current = frequency;
       
       // Calculate how far off we are
-      const centsOff = calculateCents(frequency, matchedString.targetFrequency);
+      const centsOffRaw = calculateCents(frequency, matchedString.targetFrequency);
+      const centsBias = (
+        Platform.OS === 'android' &&
+        detectionModeRef.current === 'tuning' &&
+        matchedString.stringNumber === 1 &&
+        matchedString.targetFrequency >= 320
+      ) ? 3 : 0;
+      const centsOff = centsOffRaw - centsBias;
+      let displayedCents = Math.round(centsOff);
+
+      if (Platform.OS === 'android' && matchedString.stringNumber === 1) {
+        const prev = lastReportedCentsRef.current;
+        if (typeof prev === 'number') {
+          displayedCents = Math.round((prev * 0.65) + (displayedCents * 0.35));
+        }
+        if (Math.abs(displayedCents) <= 2) {
+          displayedCents = 0;
+        }
+      }
+      lastReportedCentsRef.current = displayedCents;
       
       // In manual mode, always update regardless of range
       // In auto mode, only update if within reasonable range
-      if (modeRef.current === 'manual' || Math.abs(centsOff) < 100) {
+      const maxCentsForUpdate = Platform.OS === 'android' ? 180 : 100;
+      if (modeRef.current === 'manual' || Math.abs(centsOff) < maxCentsForUpdate) {
         onFrequencyDetected({
           frequency: parseFloat(frequency.toFixed(2)),
           detectedString: matchedString.name,
@@ -447,7 +582,7 @@ export default function FrequencyDetector({
           stringNumber: matchedString.stringNumber,
           fret: matchedString.fret ?? 0,  // Include fret number
           targetFrequency: matchedString.targetFrequency,
-          centsOff: Math.round(centsOff),
+          centsOff: displayedCents,
         });
       }
     };
@@ -470,7 +605,7 @@ export default function FrequencyDetector({
         const adjustedFrequency = position.frequency * pitchRatio;
         // Calculate frequency range for this position (±100 cents = 1 semitone)
         const semitoneRatio = Math.pow(2, 1/12);
-        const centsRange = 1.0; // ±100 cents = 1 full semitone
+        const centsRange = Platform.OS === 'android' ? 1.8 : 1.0; // Wider tolerance on old Android mics
         const lowerBound = adjustedFrequency / Math.pow(semitoneRatio, centsRange);
         const upperBound = adjustedFrequency * Math.pow(semitoneRatio, centsRange);
         
@@ -507,7 +642,7 @@ export default function FrequencyDetector({
         const adjustedFrequency = position.frequency * pitchRatio;
         // Use wider range for intonation (±100 cents = 1 semitone)
         const semitoneRatio = Math.pow(2, 1/12);
-        const centsRange = 1.0;
+        const centsRange = Platform.OS === 'android' ? 1.8 : 1.0;
         const lowerBound = adjustedFrequency / Math.pow(semitoneRatio, centsRange);
         const upperBound = adjustedFrequency * Math.pow(semitoneRatio, centsRange);
         
@@ -539,12 +674,14 @@ export default function FrequencyDetector({
         isStreamActive = false;
         ExpoAudioStreamModule.stopRecording()
           .then(() => {
-            // Delete the recorded audio file to prevent unbounded disk growth
-              if (currentStreamUuid) {
-                try { new File(currentStreamUuid).delete(); } catch (_) {}
-              }
+            // Delete ALL recording files — covers the current one plus any
+            // stragglers left by previous sessions or race conditions.
+            try { ExpoAudioStreamModule.clearAudioFiles(); } catch (_) {}
           })
-          .catch(() => {});
+          .catch(() => {
+            // stopRecording failed, still try to clean up files
+            try { ExpoAudioStreamModule.clearAudioFiles(); } catch (_) {}
+          });
       }
     };
   }, [isActive]); // Only restart when isActive changes - refs keep other values current

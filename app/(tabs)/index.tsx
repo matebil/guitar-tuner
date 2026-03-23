@@ -7,12 +7,25 @@ import { setAudioModeAsync } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, AppState, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, AppState, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function HomeScreen() {
   const { settings, getThemeColors } = useSettings();
   const colors = getThemeColors();
+  const getInTuneThresholdFor = useCallback((stringNumber: number | null, targetFrequency: number | null) => {
+    if (Platform.OS !== 'android') return 5;
+    // High strings are noisier on low-end Android microphones.
+    if (stringNumber === 1 || (targetFrequency ?? 0) >= 320) return 10;
+    if (stringNumber === 2 || (targetFrequency ?? 0) >= 220) return 9;
+    return 8;
+  }, []);
+  const getBarInTuneThresholdFor = useCallback((stringNumber: number | null, targetFrequency: number | null) => {
+    if (Platform.OS !== 'android') return 4;
+    if (stringNumber === 1 || (targetFrequency ?? 0) >= 320) return 9;
+    if (stringNumber === 2 || (targetFrequency ?? 0) >= 220) return 8;
+    return 7;
+  }, []);
   const [selectedTuning, setSelectedTuning] = useState(DEFAULT_TUNING);
   const [isListening, setIsListening] = useState(true);
   const [mode, setMode] = useState('auto'); // 'auto' or 'manual'
@@ -34,6 +47,8 @@ export default function HomeScreen() {
     targetFrequency: null,
     centsOff: 0,
   });
+  const inTuneThreshold = getInTuneThresholdFor(detectionData.stringNumber, detectionData.targetFrequency);
+  const barInTuneThreshold = getBarInTuneThresholdFor(detectionData.stringNumber, detectionData.targetFrequency);
   const blinkAnim = useRef(new Animated.Value(1)).current;
   const wasInTuneRef = useRef(false);
   const animationRef = useRef<Animated.CompositeAnimation | null>(null);
@@ -68,7 +83,12 @@ export default function HomeScreen() {
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
       if (!isFocusedRef.current) return; // Only act when this screen is the active tab
-      if (nextState === 'background' || nextState === 'inactive') {
+      // On Android, "inactive" is often transient (system UI overlays) and can
+      // cause rapid stop/start loops of the recorder.
+      const shouldPause = Platform.OS === 'android'
+        ? nextState === 'background'
+        : nextState === 'background' || nextState === 'inactive';
+      if (shouldPause) {
         setIsListening(false);
       } else if (nextState === 'active') {
         setIsListening(true);
@@ -138,7 +158,8 @@ export default function HomeScreen() {
     }
     
     // Play sound when first becoming in tune
-    const isInTune = data.detectedString && Math.abs(data.centsOff) < 5;
+    const dataInTuneThreshold = getInTuneThresholdFor(data.stringNumber ?? null, data.targetFrequency ?? null);
+    const isInTune = data.detectedString && Math.abs(data.centsOff) < dataInTuneThreshold;
     if (isInTune && !wasInTuneRef.current) {
       playInTuneSound();
     }
@@ -152,8 +173,7 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-      <StatusBar barStyle="light-content" />
-      
+
       {/* Header */}
       <View style={styles.header}>
         <Text style={[styles.title, { color: colors.primary }]}>TUNER</Text>
@@ -320,7 +340,7 @@ export default function HomeScreen() {
             
             if (isBeingTuned) {
               const cents = detectionData.centsOff;
-              if (Math.abs(cents) < 5) {
+              if (Math.abs(cents) < inTuneThreshold) {
                 // In tune
                 buttonColor = colors.inTune;
                 borderColor = colors.primary;
@@ -397,39 +417,40 @@ export default function HomeScreen() {
           noteName={detectionMode === 'intonation' && detectionData.actualNote
             ? detectionData.actualNote
             : detectionData.detectedString}
+          inTuneThreshold={barInTuneThreshold}
           colors={colors}
         />
-        {/* Cents chip — right below the gauge */}
-        {detectionData.frequency ? (() => {
-          const cents = detectionData.centsOff;
-          const absCents = Math.abs(cents);
-          const centsColor = absCents <= 4  ? colors.inTune
-                           : absCents <= 15 ? '#F5A623'
-                           : '#E05252';
-          const centsLabel = absCents <= 4  ? '✓  in tune'
-                           : cents > 0      ? `+${cents} ¢`
-                                            : `${cents} ¢`;
-          return (
-            <View style={{
-              marginTop: 2,
-              paddingHorizontal: 14, paddingVertical: 4,
-              borderRadius: 20,
-              borderWidth: 1, borderColor: centsColor,
-              backgroundColor: centsColor + '22',
-            }}>
-              <Text style={{ color: centsColor, fontSize: 13, fontFamily: 'monospace', fontWeight: '700', letterSpacing: 0.5 }}>
-                {centsLabel}
-              </Text>
-            </View>
-          );
-        })() : null}
-
       </View>
 
       {/* Frequency info panel */}
       <View style={styles.infoSection}>
         {detectionData.frequency ? (
           <View style={{ alignItems: 'center', gap: 8 }}>
+            {(() => {
+              const cents = detectionData.centsOff;
+              const absCents = Math.abs(cents);
+              const centsColor = absCents <= barInTuneThreshold ? colors.inTune
+                : absCents <= 15 ? '#F5A623'
+                : '#E05252';
+              const centsLabel = absCents <= barInTuneThreshold ? '✓  in tune'
+                : cents > 0 ? `+${cents} ¢`
+                : `${cents} ¢`;
+              return (
+                <View style={{
+                  marginBottom: 2,
+                  paddingHorizontal: 14,
+                  paddingVertical: 4,
+                  borderRadius: 20,
+                  borderWidth: 1,
+                  borderColor: centsColor,
+                  backgroundColor: centsColor + '22',
+                }}>
+                  <Text style={{ color: centsColor, fontSize: 13, fontFamily: 'monospace', fontWeight: '700', letterSpacing: 0.5 }}>
+                    {centsLabel}
+                  </Text>
+                </View>
+              );
+            })()}
             <View style={{ flexDirection: 'row', gap: 20 }}>
               <View style={{ alignItems: 'center' }}>
                 <Text style={{ color: colors.textSecondary, fontSize: 10, letterSpacing: 1, fontFamily: 'monospace', textTransform: 'uppercase' }}>Target</Text>
@@ -587,6 +608,7 @@ const styles = StyleSheet.create({
   infoSection: {
     alignItems: 'center',
     paddingHorizontal: 20,
+    paddingTop: 4,
     paddingBottom: 24,
   },
 });
