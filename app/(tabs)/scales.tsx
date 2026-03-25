@@ -19,7 +19,30 @@ import {
 } from '@/src/constants/scales';
 import { TUNINGS } from '@/src/constants/tunings';
 import { useSettings } from '@/src/contexts/SettingsContext';
+import {
+  ALL_STRINGS,
+  csvEscape,
+  type ByFretRound,
+  type FretboardAttemptRow,
+  type FretboardDifficulty,
+  type FretboardMode,
+  type FretboardPositionStats,
+  type FretboardQ,
+  getNoteForPosition,
+  makeByFretRound,
+  makeFretboardQuestion,
+  positionKey,
+  randomFrom,
+} from '@/src/utils/fretboard-practice';
 import { logger } from '@/src/utils/logger';
+import {
+  buildGuideSequence,
+  cycleNext,
+  cyclePrev,
+  getScaleInfo,
+  makeChallenge,
+  type ChallengeType,
+} from '@/src/utils/scales-practice';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
 import { setAudioModeAsync } from 'expo-audio';
@@ -56,48 +79,6 @@ const NOTE_CHROMA_MAP: Record<string, number> = {
   F: 5, 'F#': 6, Gb: 6, G: 7, 'G#': 8, Ab: 8, A: 9, 'A#': 10, Bb: 10, B: 11,
 };
 
-/**
- * Comprueba si una frecuencia pertenece a la escala con tolerancia de ±25 cents.
- *
- * Convierte la frecuencia a MIDI continuo y mide la distancia a cada nota
- * de la escala. Si alguna nota está a ≤ 25 cents, la considera "en escala".
- * Esto evita falsos errores cuando la guitarra no está perfectamente afinada.
- *
- * @param freq         Frecuencia detectada en Hz
- * @param scaleNotes   Índices (0-11) de las notas de la escala
- * @param refPitch     Frecuencia de referencia para A4 (default 440)
- * @returns { inScale, degreeIdx }  degreeIdx = -1 si no está en escala
- */
-function getScaleInfo(
-  freq: number,
-  scaleNotes: number[],
-  refPitch: number = 440
-): { inScale: boolean; degreeIdx: number } {
-  if (!freq || freq <= 0) return { inScale: false, degreeIdx: -1 };
-
-  // Número MIDI continuo: 69 = A4 = refPitch
-  const midiFloat = 12 * Math.log2(freq / refPitch) + 69;
-
-  let closestDegreeIdx = -1;
-  let closestCents = Infinity;
-
-  for (let i = 0; i < scaleNotes.length; i++) {
-    const noteClass = scaleNotes[i]; // 0-11
-    // Número MIDI entero más cercano que tenga esta clase de nota
-    const nearestMidi = Math.round((midiFloat - noteClass) / 12) * 12 + noteClass;
-    const cents = Math.abs((midiFloat - nearestMidi) * 100);
-    if (cents < closestCents) {
-      closestCents = cents;
-      closestDegreeIdx = i;
-    }
-  }
-
-  // Tolerancia: cuarto de tono (25 cents).
-  // Suficiente para perdonar pequeñas imperfecciones de afinación,
-  // pero F# y G siempre se distinguen con claridad.
-  const inScale = closestCents <= 25;
-  return { inScale, degreeIdx: inScale ? closestDegreeIdx : -1 };
-}
 
 // Etiquetas de cuerdas en orden de tab (cuerda 1 arriba)
 const STRING_LABELS = ['e', 'B', 'G', 'D', 'A', 'E'];
@@ -116,227 +97,6 @@ const MODE_KEYS = [
 // Degree names
 const DEGREE_NAMES = ['Root', '2nd', '3rd', '4th', '5th', '6th', '7th'];
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
-
-// ─── Tipo de reto ────────────────────────────────────────────────────────────
-type ChallengeType = {
-  noteName: string;   // Nombre para mostrar (ej. "F#")
-  noteIdx: number;    // Índice cromático 0-11
-  degreeIdx: number;  // Grado en la escala, 0-indexed
-  stringHints: number[]; // Cuerdas donde aparece en el patrón 3-notas-por-cuerda
-};
-
-/**
- * Genera un reto aleatorio para el modo Quiz.
- * Evita repetir la misma nota que el reto anterior.
- */
-function makeChallenge(
-  rootNote: string,
-  modeKey: string,
-  prevNoteIdx?: number,
-  priorityNoteIdxs: number[] = []
-): ChallengeType {
-  const scaleNoteIndices = getScaleNotes(rootNote, modeKey);
-  const scaleNames = getScaleNoteNames(rootNote, modeKey);
-  const pattern = getThreeNotesPerString(rootNote, modeKey);
-
-  const allDegreeIndices = Array.from({ length: scaleNoteIndices.length }, (_, i) => i);
-  const prioritizedDegreeIndices = priorityNoteIdxs.length > 0
-    ? allDegreeIndices.filter((idx) => priorityNoteIdxs.includes(scaleNoteIndices[idx]))
-    : allDegreeIndices;
-  const candidateDegreeIndices = prioritizedDegreeIndices.length > 0
-    ? prioritizedDegreeIndices
-    : allDegreeIndices;
-
-  // Elegir grado aleatorio, evitando repetir la misma nota si hay alternativas.
-  let degreeIdx = candidateDegreeIndices[Math.floor(Math.random() * candidateDegreeIndices.length)];
-  if (prevNoteIdx !== undefined && scaleNoteIndices[degreeIdx] === prevNoteIdx) {
-    const nonRepeatedCandidates = candidateDegreeIndices.filter(
-      (idx) => scaleNoteIndices[idx] !== prevNoteIdx
-    );
-    if (nonRepeatedCandidates.length > 0) {
-      degreeIdx = nonRepeatedCandidates[Math.floor(Math.random() * nonRepeatedCandidates.length)];
-    }
-  }
-
-  const noteIdx = scaleNoteIndices[degreeIdx];
-  const noteName = scaleNames[degreeIdx];
-
-  // ¿En qué cuerdas aparece este grado en el patrón de 3 notas por cuerda?
-  const stringHints: number[] = [];
-  for (const str of pattern) {
-    if ((str as any).notes.some((n: any) => n.degree === degreeIdx + 1)) {
-      stringHints.push((str as any).stringNumber);
-    }
-  }
-
-  return { noteName, noteIdx, degreeIdx, stringHints };
-}
-
-// ─── Tipo para modo Guide ────────────────────────────────────────────────────
-type GuideNote = {
-  stringNumber: number;
-  fret: number;
-  noteName: string;
-  noteIdx: number;  // 0-11 cromático
-  degree: number;   // 1-7
-};
-
-/**
- * Construye la secuencia de 18 notas para el modo guiado
- * (6 cuerdas × 3 notas por cuerda), en orden ascendente o descendente.
- */
-function buildGuideSequence(
-  rootNote: string,
-  modeKey: string,
-  direction: 'asc' | 'desc'
-): GuideNote[] {
-  const scaleNoteIndices = getScaleNotes(rootNote, modeKey);
-  const pattern = getThreeNotesPerString(rootNote, modeKey);
-
-  const sequence: GuideNote[] = [];
-  for (const str of pattern) {
-    for (const note of (str as any).notes) {
-      sequence.push({
-        stringNumber: (str as any).stringNumber,
-        fret: note.fret,
-        noteName: note.noteName,
-        noteIdx: scaleNoteIndices[note.degree - 1],
-        degree: note.degree,
-      });
-    }
-  }
-  return direction === 'desc' ? [...sequence].reverse() : sequence;
-}
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
-function cyclePrev<T>(arr: T[], current: T): T {
-  const idx = arr.indexOf(current);
-  return arr[(idx - 1 + arr.length) % arr.length];
-}
-function cycleNext<T>(arr: T[], current: T): T {
-  const idx = arr.indexOf(current);
-  return arr[(idx + 1) % arr.length];
-}
-
-// ─── Fretboard Quiz ──────────────────────────────────────────────────────────
-type FretboardQ = {
-  stringNumber: number;  // 1-6 (1 = mi agudo, 6 = mi grave)
-  fret: number;          // 0-12
-  correctNote: string;   // e.g. "G#"
-  options: string[];     // 4 opciones mezcladas (1 correcta + 3 distractores)
-};
-
-type FretboardMode = 'single' | 'by-fret';
-type FretboardDifficulty = 'easy' | 'medium' | 'hard';
-
-type FretboardPositionStats = {
-  attempts: number;
-  totalMs: number;
-  mastered: boolean;
-};
-
-type ByFretRound = {
-  fret: number;
-  currentString: number;
-  remainingStrings: number[];
-  revealed: boolean;
-};
-
-type FretboardAttemptRow = {
-  timestamp: number;
-  mode: FretboardMode;
-  stringNumber: number;
-  fret: number;
-  note: string;
-  responseMs: number;
-  correct: boolean;
-  mastered: boolean;
-};
-
-const FB_NOTES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
-// MIDI al aire: índice 0 = cuerda 1 (mi agudo, E4=64) … índice 5 = cuerda 6 (mi grave, E2=40)
-const OPEN_MIDI = [64, 59, 55, 50, 45, 40];
-const ALL_STRINGS = [1, 2, 3, 4, 5, 6];
-
-function getNoteForPosition(stringNumber: number, fret: number): string {
-  const stringIdx = Math.min(5, Math.max(0, stringNumber - 1));
-  const noteChroma = (OPEN_MIDI[stringIdx] + fret) % 12;
-  return FB_NOTES[noteChroma];
-}
-
-function positionKey(stringNumber: number, fret: number): string {
-  return `${stringNumber}:${fret}`;
-}
-
-function randomFrom<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-/**
- * Genera una pregunta aleatoria para el fretboard quiz:
- * elige cuerda/traste y devuelve la nota correcta + 3 distractores cromáticos.
- */
-function makeFretboardQuestion(
-  _difficulty: FretboardDifficulty,
-  excludedKeys: Set<string> = new Set()
-): FretboardQ {
-  const maxFret = 24;
-
-  const candidates: Array<{ stringNumber: number; fret: number }> = [];
-  for (const stringNumber of ALL_STRINGS) {
-    for (let fret = 0; fret <= maxFret; fret++) {
-      if (!excludedKeys.has(positionKey(stringNumber, fret))) {
-        candidates.push({ stringNumber, fret });
-      }
-    }
-  }
-
-  // Si la piscina completa está memorizada, vuelve a habilitar todas las posiciones para repaso.
-  const pool = candidates.length > 0
-    ? candidates
-    : ALL_STRINGS.flatMap((stringNumber) =>
-      Array.from({ length: maxFret + 1 }, (_, fret) => ({ stringNumber, fret }))
-    );
-
-  const target = randomFrom(pool);
-  const correctNote = getNoteForPosition(target.stringNumber, target.fret);
-  const noteChroma = FB_NOTES.indexOf(correctNote);
-  // Distractores cromáticos (vecinos inmediatos = más difícil distinguir)
-  const neighbors = [
-    (noteChroma - 2 + 12) % 12,
-    (noteChroma - 1 + 12) % 12,
-    (noteChroma + 1) % 12,
-    (noteChroma + 2) % 12,
-  ];
-  const wrong: string[] = [];
-  const used = new Set([correctNote]);
-  for (const ci of neighbors) {
-    const n = FB_NOTES[ci];
-    if (!used.has(n) && wrong.length < 3) { wrong.push(n); used.add(n); }
-  }
-  const rest = FB_NOTES.filter(n => !used.has(n)).sort(() => Math.random() - 0.5);
-  for (const n of rest) {
-    if (wrong.length >= 3) break;
-    wrong.push(n);
-  }
-  const options = [correctNote, ...wrong].sort(() => Math.random() - 0.5);
-  return { stringNumber: target.stringNumber, fret: target.fret, correctNote, options };
-}
-
-function makeByFretRound(): ByFretRound {
-  const fret = Math.floor(Math.random() * 25);
-  const currentString = randomFrom(ALL_STRINGS);
-  const remainingStrings = ALL_STRINGS.filter((n) => n !== currentString);
-  return { fret, currentString, remainingStrings, revealed: false };
-}
-
-function csvEscape(value: string | number | boolean): string {
-  const str = String(value ?? '');
-  if (!str.includes(',') && !str.includes('"') && !str.includes('\n')) {
-    return str;
-  }
-  return `"${str.replaceAll('"', '""')}"`;
-}
 
 // ─── Ciclo de modos por escala padre ──────────────────────────────────────
 // Cuántos semitonos sobre la tónica mayor empieza cada modo
