@@ -21,16 +21,19 @@ import { TUNINGS } from '@/src/constants/tunings';
 import { useSettings } from '@/src/contexts/SettingsContext';
 import { logger } from '@/src/utils/logger';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system';
 import { setAudioModeAsync } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  Alert,
   AppState,
   PanResponder,
   Platform,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -54,10 +57,10 @@ const NOTE_CHROMA_MAP: Record<string, number> = {
 };
 
 /**
- * Comprueba si una frecuencia pertenece a la escala con tolerancia de ±50 cents.
+ * Comprueba si una frecuencia pertenece a la escala con tolerancia de ±25 cents.
  *
  * Convierte la frecuencia a MIDI continuo y mide la distancia a cada nota
- * de la escala. Si alguna nota está a ≤ 50 cents, la considera "en escala".
+ * de la escala. Si alguna nota está a ≤ 25 cents, la considera "en escala".
  * Esto evita falsos errores cuando la guitarra no está perfectamente afinada.
  *
  * @param freq         Frecuencia detectada en Hz
@@ -129,16 +132,30 @@ type ChallengeType = {
 function makeChallenge(
   rootNote: string,
   modeKey: string,
-  prevNoteIdx?: number
+  prevNoteIdx?: number,
+  priorityNoteIdxs: number[] = []
 ): ChallengeType {
   const scaleNoteIndices = getScaleNotes(rootNote, modeKey);
   const scaleNames = getScaleNoteNames(rootNote, modeKey);
   const pattern = getThreeNotesPerString(rootNote, modeKey);
 
-  // Elegir grado aleatorio, evitando repetir el anterior
-  let degreeIdx = Math.floor(Math.random() * 7);
+  const allDegreeIndices = Array.from({ length: scaleNoteIndices.length }, (_, i) => i);
+  const prioritizedDegreeIndices = priorityNoteIdxs.length > 0
+    ? allDegreeIndices.filter((idx) => priorityNoteIdxs.includes(scaleNoteIndices[idx]))
+    : allDegreeIndices;
+  const candidateDegreeIndices = prioritizedDegreeIndices.length > 0
+    ? prioritizedDegreeIndices
+    : allDegreeIndices;
+
+  // Elegir grado aleatorio, evitando repetir la misma nota si hay alternativas.
+  let degreeIdx = candidateDegreeIndices[Math.floor(Math.random() * candidateDegreeIndices.length)];
   if (prevNoteIdx !== undefined && scaleNoteIndices[degreeIdx] === prevNoteIdx) {
-    degreeIdx = (degreeIdx + 1 + Math.floor(Math.random() * 5)) % 7;
+    const nonRepeatedCandidates = candidateDegreeIndices.filter(
+      (idx) => scaleNoteIndices[idx] !== prevNoteIdx
+    );
+    if (nonRepeatedCandidates.length > 0) {
+      degreeIdx = nonRepeatedCandidates[Math.floor(Math.random() * nonRepeatedCandidates.length)];
+    }
   }
 
   const noteIdx = scaleNoteIndices[degreeIdx];
@@ -209,19 +226,81 @@ type FretboardQ = {
   options: string[];     // 4 opciones mezcladas (1 correcta + 3 distractores)
 };
 
+type FretboardMode = 'single' | 'by-fret';
+type FretboardDifficulty = 'easy' | 'medium' | 'hard';
+
+type FretboardPositionStats = {
+  attempts: number;
+  totalMs: number;
+  mastered: boolean;
+};
+
+type ByFretRound = {
+  fret: number;
+  currentString: number;
+  remainingStrings: number[];
+  revealed: boolean;
+};
+
+type FretboardAttemptRow = {
+  timestamp: number;
+  mode: FretboardMode;
+  stringNumber: number;
+  fret: number;
+  note: string;
+  responseMs: number;
+  correct: boolean;
+  mastered: boolean;
+};
+
+const FB_NOTES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
+// MIDI al aire: índice 0 = cuerda 1 (mi agudo, E4=64) … índice 5 = cuerda 6 (mi grave, E2=40)
+const OPEN_MIDI = [64, 59, 55, 50, 45, 40];
+const ALL_STRINGS = [1, 2, 3, 4, 5, 6];
+
+function getNoteForPosition(stringNumber: number, fret: number): string {
+  const stringIdx = Math.min(5, Math.max(0, stringNumber - 1));
+  const noteChroma = (OPEN_MIDI[stringIdx] + fret) % 12;
+  return FB_NOTES[noteChroma];
+}
+
+function positionKey(stringNumber: number, fret: number): string {
+  return `${stringNumber}:${fret}`;
+}
+
+function randomFrom<T>(arr: T[]): T {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 /**
  * Genera una pregunta aleatoria para el fretboard quiz:
  * elige cuerda/traste y devuelve la nota correcta + 3 distractores cromáticos.
  */
-function makeFretboardQuestion(difficulty: 'easy' | 'medium' | 'hard'): FretboardQ {
-  const FB_NOTES = ['C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B'];
-  // MIDI al aire: índice 0 = cuerda 1 (mi agudo, E4=64) … índice 5 = cuerda 6 (mi grave, E2=40)
-  const OPEN_MIDI = [64, 59, 55, 50, 45, 40];
-  const maxFret = difficulty === 'easy' ? 5 : difficulty === 'medium' ? 9 : 12;
-  const stringIdx = Math.floor(Math.random() * 6);
-  const fret = Math.floor(Math.random() * (maxFret + 1));
-  const noteChroma = (OPEN_MIDI[stringIdx] + fret) % 12;
-  const correctNote = FB_NOTES[noteChroma];
+function makeFretboardQuestion(
+  _difficulty: FretboardDifficulty,
+  excludedKeys: Set<string> = new Set()
+): FretboardQ {
+  const maxFret = 24;
+
+  const candidates: Array<{ stringNumber: number; fret: number }> = [];
+  for (const stringNumber of ALL_STRINGS) {
+    for (let fret = 0; fret <= maxFret; fret++) {
+      if (!excludedKeys.has(positionKey(stringNumber, fret))) {
+        candidates.push({ stringNumber, fret });
+      }
+    }
+  }
+
+  // Si la piscina completa está memorizada, vuelve a habilitar todas las posiciones para repaso.
+  const pool = candidates.length > 0
+    ? candidates
+    : ALL_STRINGS.flatMap((stringNumber) =>
+      Array.from({ length: maxFret + 1 }, (_, fret) => ({ stringNumber, fret }))
+    );
+
+  const target = randomFrom(pool);
+  const correctNote = getNoteForPosition(target.stringNumber, target.fret);
+  const noteChroma = FB_NOTES.indexOf(correctNote);
   // Distractores cromáticos (vecinos inmediatos = más difícil distinguir)
   const neighbors = [
     (noteChroma - 2 + 12) % 12,
@@ -236,9 +315,27 @@ function makeFretboardQuestion(difficulty: 'easy' | 'medium' | 'hard'): Fretboar
     if (!used.has(n) && wrong.length < 3) { wrong.push(n); used.add(n); }
   }
   const rest = FB_NOTES.filter(n => !used.has(n)).sort(() => Math.random() - 0.5);
-  for (const n of rest) { if (wrong.length >= 3) break; wrong.push(n); }
+  for (const n of rest) {
+    if (wrong.length >= 3) break;
+    wrong.push(n);
+  }
   const options = [correctNote, ...wrong].sort(() => Math.random() - 0.5);
-  return { stringNumber: stringIdx + 1, fret, correctNote, options };
+  return { stringNumber: target.stringNumber, fret: target.fret, correctNote, options };
+}
+
+function makeByFretRound(): ByFretRound {
+  const fret = Math.floor(Math.random() * 25);
+  const currentString = randomFrom(ALL_STRINGS);
+  const remainingStrings = ALL_STRINGS.filter((n) => n !== currentString);
+  return { fret, currentString, remainingStrings, revealed: false };
+}
+
+function csvEscape(value: string | number | boolean): string {
+  const str = String(value ?? '');
+  if (!str.includes(',') && !str.includes('"') && !str.includes('\n')) {
+    return str;
+  }
+  return `"${str.replaceAll('"', '""')}"`;
 }
 
 // ─── Ciclo de modos por escala padre ──────────────────────────────────────
@@ -297,7 +394,16 @@ export default function ScalesScreen() {
 
   // Load last mode on mount
   useEffect(() => {
-    AsyncStorage.multiGet(['practiceScreenMode', 'practiceRootNote', 'practiceModeKey', 'practiceType']).then((pairs) => {
+    AsyncStorage.multiGet([
+      'practiceScreenMode',
+      'practiceRootNote',
+      'practiceModeKey',
+      'practiceType',
+      'practiceNoteTimingStats',
+      'practiceFocusSlowNotes',
+      'practiceFretboardPositionStats',
+      'practiceFretboardAttemptLog',
+    ]).then((pairs) => {
       const map = Object.fromEntries(pairs.map(([k, v]) => [k, v]));
       if (map.practiceScreenMode === 'guide' || map.practiceScreenMode === 'quiz' || map.practiceScreenMode === 'practice') {
         setScreenMode(map.practiceScreenMode);
@@ -306,6 +412,43 @@ export default function ScalesScreen() {
       if (map.practiceRootNote) setRootNote(map.practiceRootNote);
       if (map.practiceModeKey) setModeKey(map.practiceModeKey);
       if (map.practiceType === 'modes' || map.practiceType === 'pentatonics') setPracticeType(map.practiceType);
+
+      if (map.practiceNoteTimingStats) {
+        try {
+          const parsed = JSON.parse(map.practiceNoteTimingStats);
+          if (parsed && typeof parsed === 'object') {
+            setNoteTimingStats(parsed);
+          }
+        } catch {
+          // Ignore bad persisted payloads.
+        }
+      }
+
+      if (map.practiceFocusSlowNotes === '1') {
+        setFocusSlowNotes(true);
+      }
+
+      if (map.practiceFretboardPositionStats) {
+        try {
+          const parsed = JSON.parse(map.practiceFretboardPositionStats);
+          if (parsed && typeof parsed === 'object') {
+            setFretboardPositionStats(parsed);
+          }
+        } catch {
+          // Ignore bad persisted payloads.
+        }
+      }
+
+      if (map.practiceFretboardAttemptLog) {
+        try {
+          const parsed = JSON.parse(map.practiceFretboardAttemptLog);
+          if (Array.isArray(parsed)) {
+            setFretboardAttemptLog(parsed);
+          }
+        } catch {
+          // Ignore bad persisted payloads.
+        }
+      }
     }).catch(() => {});
   }, []);
 
@@ -322,10 +465,25 @@ export default function ScalesScreen() {
   useEffect(() => {
     AsyncStorage.setItem('practiceType', practiceType).catch(() => {});
   }, [practiceType]);
+  useEffect(() => {
+    AsyncStorage.setItem('practiceNoteTimingStats', JSON.stringify(noteTimingStats)).catch(() => {});
+  }, [noteTimingStats]);
+  useEffect(() => {
+    AsyncStorage.setItem('practiceFocusSlowNotes', focusSlowNotes ? '1' : '0').catch(() => {});
+  }, [focusSlowNotes]);
+  useEffect(() => {
+    AsyncStorage.setItem('practiceFretboardPositionStats', JSON.stringify(fretboardPositionStats)).catch(() => {});
+  }, [fretboardPositionStats]);
+  useEffect(() => {
+    AsyncStorage.setItem('practiceFretboardAttemptLog', JSON.stringify(fretboardAttemptLog)).catch(() => {});
+  }, [fretboardAttemptLog]);
 
   // challenge: el reto actual
   const [challenge, setChallenge] = useState<ChallengeType | null>(null);
   const challengeRef = useRef<ChallengeType | null>(null);
+  const challengeStartRef = useRef<number>(Date.now());
+  const [noteTimingStats, setNoteTimingStats] = useState<Record<string, { attempts: number; totalMs: number }>>({});
+  const [focusSlowNotes, setFocusSlowNotes] = useState(false);
 
   // quizStatus: estado del ciclo de cada reto
   const [quizStatus, setQuizStatus] = useState<'waiting' | 'correct' | 'wrong'>('waiting');
@@ -341,9 +499,14 @@ export default function ScalesScreen() {
   const [fretboardQ, setFretboardQ] = useState<FretboardQ | null>(null);
   const [fretboardAnswer, setFretboardAnswer] = useState<string | null>(null);
   const [fretboardScore, setFretboardScore] = useState({ correct: 0, total: 0 });
-  const [fretboardDifficulty, setFretboardDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
-  const fretboardDifficultyRef = useRef<'easy' | 'medium' | 'hard'>('medium');
+  const [fretboardDifficulty, setFretboardDifficulty] = useState<FretboardDifficulty>('medium');
+  const fretboardDifficultyRef = useRef<FretboardDifficulty>('medium');
   const fretboardAdvanceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fretboardStartRef = useRef<number>(Date.now());
+  const [fretboardMode, setFretboardMode] = useState<FretboardMode>('single');
+  const [fretboardPositionStats, setFretboardPositionStats] = useState<Record<string, FretboardPositionStats>>({});
+  const [byFretRound, setByFretRound] = useState<ByFretRound>(makeByFretRound());
+  const [fretboardAttemptLog, setFretboardAttemptLog] = useState<FretboardAttemptRow[]>([]);
 
   // ── Sub-modo del Quiz ─────────────────────────────────────────────────────
   const [quizSubMode, setQuizSubMode] = useState<'fretboard' | 'guitar'>('fretboard');
@@ -411,6 +574,187 @@ export default function ScalesScreen() {
     screenMode === 'practice' && practiceType === 'pentatonics'
       ? activePentatonicNoteIndices
       : scaleNotes;
+
+  const masteredPositionKeys = useMemo(() => {
+    return new Set(
+      Object.entries(fretboardPositionStats)
+        .filter(([, stats]) => Boolean(stats?.mastered))
+        .map(([key]) => key)
+    );
+  }, [fretboardPositionStats]);
+
+  const noteTimingSummary = useMemo(() => {
+    return Object.entries(noteTimingStats)
+      .map(([noteIdxKey, stats]) => {
+        const noteIdx = Number(noteIdxKey);
+        const attempts = stats?.attempts ?? 0;
+        const totalMs = stats?.totalMs ?? 0;
+        const avgMs = attempts > 0 ? totalMs / attempts : 0;
+        return {
+          noteIdx,
+          noteName: ROOT_DISPLAY[noteIdx] ?? NOTE_NAMES_SHARP[noteIdx] ?? noteIdxKey,
+          attempts,
+          totalMs,
+          avgMs,
+        };
+      })
+      .filter((entry) => Number.isFinite(entry.noteIdx) && entry.noteIdx >= 0 && entry.noteIdx <= 11 && entry.attempts > 0)
+      .sort((a, b) => b.avgMs - a.avgMs);
+  }, [noteTimingStats]);
+
+  const recognitionAverageMs = useMemo(() => {
+    const totals = noteTimingSummary.reduce(
+      (acc, entry) => {
+        acc.attempts += entry.attempts;
+        acc.totalMs += entry.totalMs;
+        return acc;
+      },
+      { attempts: 0, totalMs: 0 }
+    );
+    return totals.attempts > 0 ? totals.totalMs / totals.attempts : null;
+  }, [noteTimingSummary]);
+
+  const slowNoteCandidates = useMemo(() => {
+    return noteTimingSummary.filter((entry) => entry.attempts >= 2).slice(0, 3);
+  }, [noteTimingSummary]);
+
+  const priorityNoteIndices = useMemo(() => {
+    return slowNoteCandidates.map((entry) => entry.noteIdx);
+  }, [slowNoteCandidates]);
+
+  const registerRecognizedNoteTime = useCallback((noteIdx: number) => {
+    const elapsedMs = Date.now() - challengeStartRef.current;
+    if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return;
+
+    const clampedElapsedMs = Math.min(120000, Math.round(elapsedMs));
+    setNoteTimingStats((prev) => {
+      const key = String(noteIdx);
+      const prevEntry = prev[key] ?? { attempts: 0, totalMs: 0 };
+      return {
+        ...prev,
+        [key]: {
+          attempts: prevEntry.attempts + 1,
+          totalMs: prevEntry.totalMs + clampedElapsedMs,
+        },
+      };
+    });
+  }, []);
+
+  const spawnGuitarChallenge = useCallback((root: string, mode: string, prevNoteIdx?: number) => {
+    const preferredNoteIdxs = focusSlowNotes ? priorityNoteIndices : [];
+    const newC = makeChallenge(root, mode, prevNoteIdx, preferredNoteIdxs);
+    setChallenge(newC);
+    challengeRef.current = newC;
+    setQuizStatus('waiting');
+    quizStatusRef.current = 'waiting';
+    setDetectionData({ frequency: null, actualNote: null });
+    hasEvaluatedRef.current = false;
+    quizDebounceCountRef.current = 0;
+    challengeStartRef.current = Date.now();
+  }, [focusSlowNotes, priorityNoteIndices]);
+
+  const spawnFretboardQuestion = useCallback((difficulty: FretboardDifficulty) => {
+    const newQ = makeFretboardQuestion(difficulty, masteredPositionKeys);
+    setFretboardQ(newQ);
+    setFretboardAnswer(null);
+    fretboardStartRef.current = Date.now();
+  }, [masteredPositionKeys]);
+
+  const registerFretboardAttempt = useCallback((stringNumber: number, fret: number, elapsedMs: number, isRight: boolean) => {
+    if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return;
+
+    const clampedElapsedMs = Math.min(120000, Math.round(elapsedMs));
+    const note = getNoteForPosition(stringNumber, fret);
+    const masteredByTime = isRight && clampedElapsedMs < 2000;
+
+    setFretboardAttemptLog((prev) => ([
+      ...prev,
+      {
+        timestamp: Date.now(),
+        mode: 'single',
+        stringNumber,
+        fret,
+        note,
+        responseMs: clampedElapsedMs,
+        correct: isRight,
+        mastered: masteredByTime,
+      },
+    ]));
+
+    if (!isRight) return;
+
+    const key = positionKey(stringNumber, fret);
+    setFretboardPositionStats((prev) => {
+      const prevEntry = prev[key] ?? { attempts: 0, totalMs: 0, mastered: false };
+      const attempts = prevEntry.attempts + 1;
+      const totalMs = prevEntry.totalMs + clampedElapsedMs;
+      const mastered = prevEntry.mastered || masteredByTime;
+
+      return {
+        ...prev,
+        [key]: { attempts, totalMs, mastered },
+      };
+    });
+  }, []);
+
+  const resetMasteredPositions = useCallback(() => {
+    setFretboardPositionStats((prev) => {
+      const next: Record<string, FretboardPositionStats> = {};
+      for (const [key, stats] of Object.entries(prev)) {
+        next[key] = { ...stats, mastered: false };
+      }
+      return next;
+    });
+  }, []);
+
+  const exportFretboardAttemptsCsv = useCallback(async () => {
+    if (fretboardAttemptLog.length === 0) {
+      Alert.alert('No data', 'There are no fretboard attempts to export yet.');
+      return;
+    }
+
+    const header = ['timestamp_iso', 'mode', 'string', 'fret', 'note', 'time_ms', 'correct', 'mastered'];
+    const rows = fretboardAttemptLog.map((row) => [
+      new Date(row.timestamp).toISOString(),
+      row.mode,
+      row.stringNumber,
+      row.fret,
+      row.note,
+      row.responseMs,
+      row.correct,
+      row.mastered,
+    ]);
+
+    const csv = [header, ...rows]
+      .map((cols) => cols.map((col) => csvEscape(col)).join(','))
+      .join('\n');
+
+    const fileUri = `${FileSystem.cacheDirectory}matebil-fretboard-attempts-${Date.now()}.csv`;
+    await FileSystem.writeAsStringAsync(fileUri, csv, { encoding: FileSystem.EncodingType.UTF8 });
+
+    await Share.share({
+      url: fileUri,
+      message: 'Matebil fretboard attempts CSV',
+      title: 'Export fretboard attempts',
+    });
+  }, [fretboardAttemptLog]);
+
+  const advanceByFretRound = useCallback(() => {
+    setByFretRound((prev) => {
+      if (prev.remainingStrings.length === 0) {
+        return makeByFretRound();
+      }
+
+      const nextString = randomFrom(prev.remainingStrings);
+      const remainingStrings = prev.remainingStrings.filter((s) => s !== nextString);
+      return {
+        ...prev,
+        currentString: nextString,
+        remainingStrings,
+        revealed: false,
+      };
+    });
+  }, []);
 
   // ── Ref para ciclar modos (evita closures obsoletos en PanResponder) ──────
   const cycleParentModeRef = useRef<(dir: 1 | -1) => void>(() => {});
@@ -489,12 +833,7 @@ export default function ScalesScreen() {
   useEffect(() => {
     if (screenModeRef.current === 'quiz') {
       if (autoAdvanceRef.current) clearTimeout(autoAdvanceRef.current);
-      const newC = makeChallenge(rootNote, modeKey);
-      setChallenge(newC);
-      challengeRef.current = newC;
-      setQuizStatus('waiting');
-      quizStatusRef.current = 'waiting';
-      hasEvaluatedRef.current = false;
+      spawnGuitarChallenge(rootNote, modeKey);
     }
     // En modo guide, reiniciar desde la primera nota
     if (screenModeRef.current === 'guide') {
@@ -504,7 +843,7 @@ export default function ScalesScreen() {
       guideStatusRef.current = 'waiting';
       hasEvaluatedRef.current = false;
     }
-  }, [rootNote, modeKey]);
+  }, [rootNote, modeKey, spawnGuitarChallenge]);
 
   // Reiniciar posición al cambiar dirección en guide
   useEffect(() => {
@@ -549,13 +888,7 @@ export default function ScalesScreen() {
       }
       // Nuevo reto
       if (autoAdvanceRef.current) clearTimeout(autoAdvanceRef.current);
-      const newC = makeChallenge(rootNoteRef.current, modeKeyRef.current, challengeRef.current?.noteIdx);
-      setChallenge(newC);
-      challengeRef.current = newC;
-      setQuizStatus('waiting');
-      quizStatusRef.current = 'waiting';
-      setDetectionData({ frequency: null, actualNote: null });
-      hasEvaluatedRef.current = false;
+      spawnGuitarChallenge(rootNoteRef.current, modeKeyRef.current, challengeRef.current?.noteIdx);
       animateBeat();
     };
 
@@ -563,7 +896,7 @@ export default function ScalesScreen() {
     timedIntervalRef.current = setInterval(advanceBeat, beatMs);
     setTimedRunning(true);
     timedRunningRef.current = true;
-  }, [beatProgressAnim, stopTimedMode]);
+  }, [beatProgressAnim, spawnGuitarChallenge, stopTimedMode]);
 
   // Limpiar timed interval al desmontar o cambiar de modo
   useEffect(() => {
@@ -578,16 +911,14 @@ export default function ScalesScreen() {
   useEffect(() => {
     if (screenMode === 'quiz') {
       if (fretboardAdvanceRef.current) clearTimeout(fretboardAdvanceRef.current);
-      const q = makeFretboardQuestion(fretboardDifficultyRef.current);
-      setFretboardQ(q);
-      setFretboardAnswer(null);
+      spawnFretboardQuestion(fretboardDifficultyRef.current);
       setFretboardScore({ correct: 0, total: 0 });
       setStreak(0);
     } else {
       if (fretboardAdvanceRef.current) clearTimeout(fretboardAdvanceRef.current);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screenMode]);
+  }, [screenMode, spawnFretboardQuestion]);
 
   // ── Callback de detección ────────────────────────────────────────────────
   const handleFrequencyDetected = (data: any) => {
@@ -642,19 +973,13 @@ export default function ScalesScreen() {
         if (quizDebounceCountRef.current >= QUIZ_DEBOUNCE_FRAMES) {
           hasEvaluatedRef.current = true;
           quizDebounceCountRef.current = 0;
+          registerRecognizedNoteTime(challengeRef.current.noteIdx);
           setQuizStatus('correct');
           quizStatusRef.current = 'correct';
           setStreak((s) => s + 1);
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
           autoAdvanceRef.current = setTimeout(() => {
-            const newC = makeChallenge(rootNoteRef.current, modeKeyRef.current, challengeRef.current?.noteIdx);
-            setChallenge(newC);
-            challengeRef.current = newC;
-            setQuizStatus('waiting');
-            quizStatusRef.current = 'waiting';
-            setDetectionData({ frequency: null, actualNote: null });
-            hasEvaluatedRef.current = false;
-            quizDebounceCountRef.current = 0;
+            spawnGuitarChallenge(rootNoteRef.current, modeKeyRef.current, challengeRef.current?.noteIdx);
           }, 1500);
         }
       } else {
@@ -803,13 +1128,8 @@ export default function ScalesScreen() {
             onPress={() => {
               if (screenMode !== 'quiz') {
                 if (autoAdvanceRef.current) clearTimeout(autoAdvanceRef.current);
-                const newC = makeChallenge(rootNote, modeKey);
-                setChallenge(newC);
-                challengeRef.current = newC;
-                setQuizStatus('waiting');
-                quizStatusRef.current = 'waiting';
+                spawnGuitarChallenge(rootNote, modeKey);
                 setStreak(0);
-                hasEvaluatedRef.current = false;
               }
               setScreenMode('quiz');
               screenModeRef.current = 'quiz';
@@ -1536,8 +1856,7 @@ export default function ScalesScreen() {
               setQuizSubMode('fretboard');
               quizSubModeRef.current = 'fretboard';
               if (fretboardAdvanceRef.current) clearTimeout(fretboardAdvanceRef.current);
-              setFretboardQ(makeFretboardQuestion(fretboardDifficultyRef.current));
-              setFretboardAnswer(null);
+              spawnFretboardQuestion(fretboardDifficultyRef.current);
               setFretboardScore({ correct: 0, total: 0 });
               setStreak(0);
             }}
@@ -1552,14 +1871,8 @@ export default function ScalesScreen() {
               setQuizSubMode('guitar');
               quizSubModeRef.current = 'guitar';
               if (autoAdvanceRef.current) clearTimeout(autoAdvanceRef.current);
-              const newC = makeChallenge(rootNote, modeKey);
-              setChallenge(newC);
-              challengeRef.current = newC;
-              setQuizStatus('waiting');
-              quizStatusRef.current = 'waiting';
+              spawnGuitarChallenge(rootNote, modeKey);
               setStreak(0);
-              hasEvaluatedRef.current = false;
-              quizDebounceCountRef.current = 0;
             }}
           >
             <Text style={[styles.toggleText, { color: quizSubMode === 'guitar' ? colors.textOnPrimary : colors.textSecondary }]}>
@@ -1571,11 +1884,19 @@ export default function ScalesScreen() {
         {/* ── Encabezado: puntuación + racha ── */}
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, marginBottom: 8, marginTop: 8 }}>
           {quizSubMode === 'fretboard' ? (
-            <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>
-              {fretboardScore.correct}/{fretboardScore.total} ✓
-            </Text>
+            fretboardMode === 'single' ? (
+              <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>
+                {fretboardScore.correct}/{fretboardScore.total} ✓
+              </Text>
+            ) : (
+              <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '700' }}>
+                Fret-by-fret study
+              </Text>
+            )
           ) : (
-            <View />
+            <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600', fontFamily: 'monospace' }}>
+              Avg {recognitionAverageMs != null ? `${Math.round(recognitionAverageMs)} ms` : '--'}
+            </Text>
           )}
           {streak > 0 && (
             <Text style={{ color: colors.primary, fontSize: 15, fontWeight: '700' }}>🔥 {streak}</Text>
@@ -1583,7 +1904,97 @@ export default function ScalesScreen() {
         </View>
 
         {/* ═══ SUB-MODO MÁSTIL ═══ */}
-        {quizSubMode === 'fretboard' && fretboardQ && (<>
+        {quizSubMode === 'fretboard' && (<>
+
+        <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, marginBottom: 10 }}>
+          <TouchableOpacity
+            onPress={() => setFretboardMode('single')}
+            style={[
+              styles.bpmChip,
+              {
+                flex: 1,
+                backgroundColor: fretboardMode === 'single' ? colors.primary : colors.buttonBg,
+                borderColor: fretboardMode === 'single' ? colors.primaryBorder : colors.buttonBorder,
+              },
+            ]}
+          >
+            <Text style={{ color: fretboardMode === 'single' ? colors.textOnPrimary : colors.textSecondary, fontSize: 12, fontWeight: '700' }}>
+              Single note
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => {
+              setFretboardMode('by-fret');
+              setByFretRound(makeByFretRound());
+            }}
+            style={[
+              styles.bpmChip,
+              {
+                flex: 1,
+                backgroundColor: fretboardMode === 'by-fret' ? colors.primary : colors.buttonBg,
+                borderColor: fretboardMode === 'by-fret' ? colors.primaryBorder : colors.buttonBorder,
+              },
+            ]}
+          >
+            <Text style={{ color: fretboardMode === 'by-fret' ? colors.textOnPrimary : colors.textSecondary, fontSize: 12, fontWeight: '700' }}>
+              By fret
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={[styles.modeCard, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder, marginTop: 0 }]}>
+          <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>
+            Mastered positions (&lt;2s): {masteredPositionKeys.size}/150
+          </Text>
+          <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+            When you answer a position correctly in under 2s, it is marked as memorized and removed from the random pool.
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+            <TouchableOpacity
+              onPress={() => {
+                void exportFretboardAttemptsCsv().catch(() => {
+                  Alert.alert('Export error', 'Unable to export CSV right now.');
+                });
+              }}
+              style={{
+                flex: 1,
+                borderWidth: 1,
+                borderColor: colors.buttonBorder,
+                borderRadius: 8,
+                paddingVertical: 8,
+                alignItems: 'center',
+                backgroundColor: colors.buttonBg,
+              }}
+            >
+              <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '700' }}>Export CSV</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                Alert.alert(
+                  'Reset memorized positions',
+                  'This will make all positions eligible again in random quiz. Continue?',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Reset', style: 'destructive', onPress: resetMasteredPositions },
+                  ]
+                );
+              }}
+              style={{
+                flex: 1,
+                borderWidth: 1,
+                borderColor: colors.buttonBorder,
+                borderRadius: 8,
+                paddingVertical: 8,
+                alignItems: 'center',
+                backgroundColor: colors.buttonBg,
+              }}
+            >
+              <Text style={{ color: colors.sharp, fontSize: 12, fontWeight: '700' }}>Reset memorized</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {fretboardMode === 'single' && fretboardQ && (<>
 
         {/* ── Selector de dificultad ── */}
         <View style={{ flexDirection: 'row', gap: 8, paddingHorizontal: 16, marginBottom: 14 }}>
@@ -1594,9 +2005,7 @@ export default function ScalesScreen() {
                 setFretboardDifficulty(diff);
                 fretboardDifficultyRef.current = diff;
                 if (fretboardAdvanceRef.current) clearTimeout(fretboardAdvanceRef.current);
-                const newQ = makeFretboardQuestion(diff);
-                setFretboardQ(newQ);
-                setFretboardAnswer(null);
+                spawnFretboardQuestion(diff);
               }}
               style={[
                 styles.bpmChip,
@@ -1626,7 +2035,7 @@ export default function ScalesScreen() {
           const FB_STRING_LABELS = ['e', 'B', 'G', 'D', 'A', 'E'];
           const qStringIdx = fretboardQ.stringNumber - 1;
           const fretWindowStart = Math.max(0, fretboardQ.fret - 2);
-          const fretWindowEnd = Math.min(12, fretWindowStart + 6);
+          const fretWindowEnd = Math.min(24, fretWindowStart + 6);
           const frets = Array.from({ length: fretWindowEnd - fretWindowStart + 1 }, (_, i) => fretWindowStart + i);
           const CELL_W = 44;
           const CELL_H = 40;
@@ -1716,8 +2125,10 @@ export default function ScalesScreen() {
                 onPress={() => {
                   if (fretboardAnswer !== null) return;
                   const isRight = option === fretboardQ.correctNote;
+                  const elapsedMs = Date.now() - fretboardStartRef.current;
                   setFretboardAnswer(option);
                   setFretboardScore(s => ({ correct: s.correct + (isRight ? 1 : 0), total: s.total + 1 }));
+                  registerFretboardAttempt(fretboardQ.stringNumber, fretboardQ.fret, elapsedMs, isRight);
                   if (isRight) {
                     setStreak(s => s + 1);
                     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
@@ -1726,8 +2137,7 @@ export default function ScalesScreen() {
                     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
                   }
                   fretboardAdvanceRef.current = setTimeout(() => {
-                    setFretboardQ(makeFretboardQuestion(fretboardDifficultyRef.current));
-                    setFretboardAnswer(null);
+                    spawnFretboardQuestion(fretboardDifficultyRef.current);
                   }, 1400);
                 }}
                 style={{
@@ -1754,18 +2164,107 @@ export default function ScalesScreen() {
             style={[styles.nextBtn, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder }]}
             onPress={() => {
               if (fretboardAdvanceRef.current) clearTimeout(fretboardAdvanceRef.current);
-              setFretboardQ(makeFretboardQuestion(fretboardDifficultyRef.current));
-              setFretboardAnswer(null);
+              spawnFretboardQuestion(fretboardDifficultyRef.current);
             }}
           >
             <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '600' }}>Skip  →</Text>
           </TouchableOpacity>
         )}
         </>)}
+
+        {fretboardMode === 'by-fret' && (
+          <>
+            <View style={[styles.challengeCard, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder }]}> 
+              <Text style={[styles.challengeLabel, { color: colors.textSecondary }]}>FRET STUDY</Text>
+              <Text style={[styles.challengeNote, { color: colors.primary, fontSize: 56, lineHeight: 62 }]}> 
+                Fret {byFretRound.fret === 0 ? 'Open' : byFretRound.fret}
+              </Text>
+              <Text style={[styles.challengeDegree, { color: colors.textSecondary }]}>
+                Current string: {STRING_LABELS[byFretRound.currentString - 1]}
+              </Text>
+            </View>
+
+            <View style={[styles.modeCard, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder, marginTop: 10 }]}> 
+              {ALL_STRINGS.map((stringNumber) => {
+                const isCurrent = stringNumber === byFretRound.currentString;
+                const canReveal = byFretRound.revealed && isCurrent;
+                return (
+                  <View
+                    key={stringNumber}
+                    style={{
+                      flexDirection: 'row',
+                      justifyContent: 'space-between',
+                      paddingVertical: 6,
+                      paddingHorizontal: 4,
+                      borderRadius: 8,
+                      backgroundColor: isCurrent ? colors.primary + '18' : 'transparent',
+                    }}
+                  >
+                    <Text style={{ color: isCurrent ? colors.primary : colors.textSecondary, fontSize: 13, fontWeight: '700' }}>
+                      String {STRING_LABELS[stringNumber - 1]}
+                    </Text>
+                    <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700', fontFamily: 'monospace' }}>
+                      {canReveal ? getNoteForPosition(stringNumber, byFretRound.fret) : '...'}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 10, paddingHorizontal: 16, marginTop: 10 }}>
+              <TouchableOpacity
+                style={[styles.nextBtn, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder, flex: 1, marginHorizontal: 0 }]}
+                onPress={() => setByFretRound((prev) => ({ ...prev, revealed: true }))}
+              >
+                <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '700' }}>Show note</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.nextBtn, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder, flex: 1, marginHorizontal: 0 }]}
+                onPress={advanceByFretRound}
+              >
+                <Text style={{ color: colors.primary, fontSize: 13, fontWeight: '700' }}>
+                  {byFretRound.remainingStrings.length > 0 ? 'Next string →' : 'Next fret →'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+        </>)}
         {/* ═══ FIN SUB-MODO MÁSTIL ═══ */}
 
         {/* ═══ SUB-MODO GUITARRA (micrófono) ═══ */}
         {quizSubMode === 'guitar' && challenge && (<>
+
+        <View style={[styles.modeCard, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder, marginTop: 8 }]}> 
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <Text style={{ color: colors.textSecondary, fontSize: 12, fontWeight: '700', letterSpacing: 0.4 }}>
+              RECOGNITION TIME
+            </Text>
+            <TouchableOpacity
+              onPress={() => setFocusSlowNotes((v) => !v)}
+              style={{
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+                borderRadius: 8,
+                borderWidth: 1,
+                backgroundColor: focusSlowNotes ? colors.primary + '22' : colors.buttonBg,
+                borderColor: focusSlowNotes ? colors.primary : colors.buttonBorder,
+              }}
+            >
+              <Text style={{ color: focusSlowNotes ? colors.primary : colors.textSecondary, fontSize: 11, fontWeight: '700' }}>
+                Focus slow notes: {focusSlowNotes ? 'ON' : 'OFF'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={{ color: colors.text, fontSize: 13, marginTop: 4 }}>
+            Average: {recognitionAverageMs != null ? `${Math.round(recognitionAverageMs)} ms` : 'No data yet'}
+          </Text>
+          <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+            {slowNoteCandidates.length > 0
+              ? `Slowest notes: ${slowNoteCandidates.map((entry) => `${entry.noteName} (${Math.round(entry.avgMs)} ms)`).join('  ·  ')}`
+              : 'Slowest notes: play at least 2 successful attempts per note to unlock focus mode'}
+          </Text>
+        </View>
 
         {/* Selector Root + Mode dentro del quiz guitarra */}
         <View style={styles.selectorsRow}>
@@ -1865,14 +2364,7 @@ export default function ScalesScreen() {
           style={[styles.nextBtn, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder }]}
           onPress={() => {
             if (autoAdvanceRef.current) clearTimeout(autoAdvanceRef.current);
-            const newC = makeChallenge(rootNote, modeKey, challenge.noteIdx);
-            setChallenge(newC);
-            challengeRef.current = newC;
-            setQuizStatus('waiting');
-            quizStatusRef.current = 'waiting';
-            setDetectionData({ frequency: null, actualNote: null });
-            hasEvaluatedRef.current = false;
-            quizDebounceCountRef.current = 0;
+            spawnGuitarChallenge(rootNote, modeKey, challenge.noteIdx);
           }}
         >
           <Text style={{ color: colors.primary, fontSize: 14, fontWeight: '700', letterSpacing: 0.5 }}>
