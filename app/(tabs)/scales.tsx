@@ -36,6 +36,17 @@ import {
 } from '@/src/utils/fretboard-practice';
 import { logger } from '@/src/utils/logger';
 import {
+  loadPracticePersistedState,
+  savePracticeFocusSlowNotes,
+  savePracticeFretboardAttemptLog,
+  savePracticeFretboardPositionStats,
+  savePracticeModeKey,
+  savePracticeNoteTimingStats,
+  savePracticeRootNote,
+  savePracticeScreenMode,
+  savePracticeType,
+} from '@/src/utils/practice-storage';
+import {
   buildGuideSequence,
   cycleNext,
   cyclePrev,
@@ -43,7 +54,6 @@ import {
   makeChallenge,
   type ChallengeType,
 } from '@/src/utils/scales-practice';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
 import { setAudioModeAsync } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
@@ -154,88 +164,45 @@ export default function ScalesScreen() {
 
   // Load last mode on mount
   useEffect(() => {
-    AsyncStorage.multiGet([
-      'practiceScreenMode',
-      'practiceRootNote',
-      'practiceModeKey',
-      'practiceType',
-      'practiceNoteTimingStats',
-      'practiceFocusSlowNotes',
-      'practiceFretboardPositionStats',
-      'practiceFretboardAttemptLog',
-    ]).then((pairs) => {
-      const map = Object.fromEntries(pairs.map(([k, v]) => [k, v]));
-      if (map.practiceScreenMode === 'guide' || map.practiceScreenMode === 'quiz' || map.practiceScreenMode === 'practice') {
-        setScreenMode(map.practiceScreenMode);
-        screenModeRef.current = map.practiceScreenMode;
+    loadPracticePersistedState().then((state) => {
+      if (state.screenMode) {
+        setScreenMode(state.screenMode);
+        screenModeRef.current = state.screenMode;
       }
-      if (map.practiceRootNote) setRootNote(map.practiceRootNote);
-      if (map.practiceModeKey) setModeKey(map.practiceModeKey);
-      if (map.practiceType === 'modes' || map.practiceType === 'pentatonics') setPracticeType(map.practiceType);
-
-      if (map.practiceNoteTimingStats) {
-        try {
-          const parsed = JSON.parse(map.practiceNoteTimingStats);
-          if (parsed && typeof parsed === 'object') {
-            setNoteTimingStats(parsed);
-          }
-        } catch {
-          // Ignore bad persisted payloads.
-        }
-      }
-
-      if (map.practiceFocusSlowNotes === '1') {
-        setFocusSlowNotes(true);
-      }
-
-      if (map.practiceFretboardPositionStats) {
-        try {
-          const parsed = JSON.parse(map.practiceFretboardPositionStats);
-          if (parsed && typeof parsed === 'object') {
-            setFretboardPositionStats(parsed);
-          }
-        } catch {
-          // Ignore bad persisted payloads.
-        }
-      }
-
-      if (map.practiceFretboardAttemptLog) {
-        try {
-          const parsed = JSON.parse(map.practiceFretboardAttemptLog);
-          if (Array.isArray(parsed)) {
-            setFretboardAttemptLog(parsed);
-          }
-        } catch {
-          // Ignore bad persisted payloads.
-        }
-      }
+      if (state.rootNote) setRootNote(state.rootNote);
+      if (state.modeKey) setModeKey(state.modeKey);
+      if (state.practiceType) setPracticeType(state.practiceType);
+      if (state.noteTimingStats) setNoteTimingStats(state.noteTimingStats);
+      if (state.focusSlowNotes) setFocusSlowNotes(true);
+      if (state.fretboardPositionStats) setFretboardPositionStats(state.fretboardPositionStats);
+      if (state.fretboardAttemptLog) setFretboardAttemptLog(state.fretboardAttemptLog as FretboardAttemptRow[]);
     }).catch(() => {});
   }, []);
 
   // Persist whenever screenMode, rootNote or modeKey changes
   useEffect(() => {
-    AsyncStorage.setItem('practiceScreenMode', screenMode).catch(() => {});
+    savePracticeScreenMode(screenMode).catch(() => {});
   }, [screenMode]);
   useEffect(() => {
-    AsyncStorage.setItem('practiceRootNote', rootNote).catch(() => {});
+    savePracticeRootNote(rootNote).catch(() => {});
   }, [rootNote]);
   useEffect(() => {
-    AsyncStorage.setItem('practiceModeKey', modeKey).catch(() => {});
+    savePracticeModeKey(modeKey).catch(() => {});
   }, [modeKey]);
   useEffect(() => {
-    AsyncStorage.setItem('practiceType', practiceType).catch(() => {});
+    savePracticeType(practiceType).catch(() => {});
   }, [practiceType]);
   useEffect(() => {
-    AsyncStorage.setItem('practiceNoteTimingStats', JSON.stringify(noteTimingStats)).catch(() => {});
+    savePracticeNoteTimingStats(noteTimingStats).catch(() => {});
   }, [noteTimingStats]);
   useEffect(() => {
-    AsyncStorage.setItem('practiceFocusSlowNotes', focusSlowNotes ? '1' : '0').catch(() => {});
+    savePracticeFocusSlowNotes(focusSlowNotes).catch(() => {});
   }, [focusSlowNotes]);
   useEffect(() => {
-    AsyncStorage.setItem('practiceFretboardPositionStats', JSON.stringify(fretboardPositionStats)).catch(() => {});
+    savePracticeFretboardPositionStats(fretboardPositionStats).catch(() => {});
   }, [fretboardPositionStats]);
   useEffect(() => {
-    AsyncStorage.setItem('practiceFretboardAttemptLog', JSON.stringify(fretboardAttemptLog)).catch(() => {});
+    savePracticeFretboardAttemptLog(fretboardAttemptLog).catch(() => {});
   }, [fretboardAttemptLog]);
 
   // challenge: el reto actual
