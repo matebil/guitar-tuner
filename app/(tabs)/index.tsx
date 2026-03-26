@@ -31,8 +31,8 @@ export default function HomeScreen() {
   const [mode, setMode] = useState('auto'); // 'auto' or 'manual'
   const [detectionMode, setDetectionMode] = useState<'tuning' | 'intonation'>('tuning'); // 'tuning' or 'intonation'
   const [selectedString, setSelectedString] = useState(null); // For manual mode
-  const [rawFrequency, setRawFrequency] = useState(null);
-  const [bufferStatus, setBufferStatus] = useState({ current: 0, needed: 0 });
+  const handleRawFrequency = useCallback((_value: number | null) => {}, []);
+  const handleBufferStatus = useCallback((_value: { current: number; needed: number }) => {}, []);
   const isListeningRef = useRef(isListening);
   const hasFrequencyRef = useRef(false);
   useEffect(() => { isListeningRef.current = isListening; }, [isListening]);
@@ -429,12 +429,19 @@ export default function HomeScreen() {
             {(() => {
               const cents = detectionData.centsOff;
               const absCents = Math.abs(cents);
-              const centsColor = absCents <= barInTuneThreshold ? colors.inTune
-                : absCents <= 15 ? '#F5A623'
-                : '#E05252';
-              const centsLabel = absCents <= barInTuneThreshold ? '✓  in tune'
-                : cents > 0 ? `+${cents} ¢`
-                : `${cents} ¢`;
+              let centsColor = '#E05252';
+              if (absCents <= barInTuneThreshold) {
+                centsColor = colors.inTune;
+              } else if (absCents <= 15) {
+                centsColor = '#F5A623';
+              }
+
+              let centsLabel = `${cents} ¢`;
+              if (absCents <= barInTuneThreshold) {
+                centsLabel = '✓  in tune';
+              } else if (cents > 0) {
+                centsLabel = `+${cents} ¢`;
+              }
               return (
                 <View style={{
                   marginBottom: 2,
@@ -478,8 +485,8 @@ export default function HomeScreen() {
         mode={mode}
         detectionMode={detectionMode}
         selectedString={selectedString}
-        onRawFrequency={setRawFrequency as any}
-        onBufferStatus={setBufferStatus as any}
+        onRawFrequency={handleRawFrequency as any}
+        onBufferStatus={handleBufferStatus as any}
         onSignalLevel={() => {}}
         referencePitch={settings.referencePitch}
         yinThreshold={settings.yinThreshold}

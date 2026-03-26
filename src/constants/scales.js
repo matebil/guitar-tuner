@@ -253,9 +253,13 @@ export function getDiatonicChords(rootNote, modeKey) {
       quality = 'aug'; symbol = '+'; pentatonicType = 'major';
     }
 
-    const roman = (quality === 'minor' || quality === 'dim')
-      ? romanNumerals[i].toLowerCase() + (quality === 'dim' ? '°' : '')
-      : romanNumerals[i] + (quality === 'aug' ? '+' : '');
+    let roman = romanNumerals[i];
+    if (quality === 'minor' || quality === 'dim') {
+      roman = romanNumerals[i].toLowerCase();
+      if (quality === 'dim') roman += '°';
+    } else if (quality === 'aug') {
+      roman += '+';
+    }
 
     const chordName = noteDisplay(chordRootIdx, parentRootIdx);
     const pentLabel = pentatonicType === 'major' ? 'Maj' : 'Min';

@@ -276,18 +276,6 @@ export default function ScalesScreen() {
   const guideDirectionRef = useRef<'asc' | 'desc'>('asc');
   const guidePentatonicTypeRef = useRef<'major' | 'minor'>('minor');
 
-  // ── Estado modo Quiz Timed ───────────────────────────────────────────────
-  const [isTimedMode, setIsTimedMode] = useState(false);
-  const [timedBpm, setTimedBpm] = useState(60);
-  const [timedRunning, setTimedRunning] = useState(false);
-  const [timedScore, setTimedScore] = useState({ correct: 0, total: 0 });
-  const timedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const beatProgressAnim = useRef(new Animated.Value(0)).current;
-  const beatAnimRef = useRef<Animated.CompositeAnimation | null>(null);
-  const isTimedModeRef = useRef(false);
-  const timedRunningRef = useRef(false);
-  const timedBpmRef = useRef(60);
-
   // Datos derivados
   const mode = MODES[modeKey as keyof typeof MODES];
   const scaleNotes = getScaleNotes(rootNote, modeKey);
@@ -561,10 +549,6 @@ export default function ScalesScreen() {
   useEffect(() => { guideDirectionRef.current = guideDirection; }, [guideDirection]);
   useEffect(() => { guidePentatonicTypeRef.current = guidePentatonicType; }, [guidePentatonicType]);
   useEffect(() => { practiceTypeRef.current = practiceType; }, [practiceType]);
-  useEffect(() => { isTimedModeRef.current = isTimedMode; }, [isTimedMode]);
-  useEffect(() => { timedRunningRef.current = timedRunning; }, [timedRunning]);
-  useEffect(() => { timedBpmRef.current = timedBpm; }, [timedBpm]);
-
   // Cuando cambian root/mode en modo quiz, regenerar reto
   useEffect(() => {
     if (screenModeRef.current === 'quiz') {
@@ -590,59 +574,6 @@ export default function ScalesScreen() {
     hasEvaluatedRef.current = false;
   }, [guideDirection, guidePentatonicType, practiceType]);
 
-  // ── Metrónomo del modo Quiz Timed ────────────────────────────────────────
-  const stopTimedMode = useCallback(() => {
-    if (timedIntervalRef.current) {
-      clearInterval(timedIntervalRef.current);
-      timedIntervalRef.current = null;
-    }
-    if (beatAnimRef.current) beatAnimRef.current.stop();
-    beatProgressAnim.setValue(0);
-    setTimedRunning(false);
-    timedRunningRef.current = false;
-  }, [beatProgressAnim]);
-
-  const startTimedMode = useCallback(() => {
-    const beatMs = Math.round(60000 / timedBpmRef.current);
-
-    const animateBeat = () => {
-      beatProgressAnim.setValue(0);
-      beatAnimRef.current = Animated.timing(beatProgressAnim, {
-        toValue: 1,
-        duration: beatMs,
-        useNativeDriver: false,
-      });
-      beatAnimRef.current.start();
-    };
-
-    const advanceBeat = () => {
-      // Puntuar el beat actual
-      if (quizStatusRef.current === 'correct') {
-        setTimedScore((s) => ({ correct: s.correct + 1, total: s.total + 1 }));
-      } else {
-        setTimedScore((s) => ({ ...s, total: s.total + 1 }));
-      }
-      // Nuevo reto
-      if (autoAdvanceRef.current) clearTimeout(autoAdvanceRef.current);
-      spawnGuitarChallenge(rootNoteRef.current, modeKeyRef.current, challengeRef.current?.noteIdx);
-      animateBeat();
-    };
-
-    animateBeat();
-    timedIntervalRef.current = setInterval(advanceBeat, beatMs);
-    setTimedRunning(true);
-    timedRunningRef.current = true;
-  }, [beatProgressAnim, spawnGuitarChallenge, stopTimedMode]);
-
-  // Limpiar timed interval al desmontar o cambiar de modo
-  useEffect(() => {
-    if (screenMode !== 'quiz') stopTimedMode();
-  }, [screenMode, stopTimedMode]);
-
-  useEffect(() => {
-    return () => stopTimedMode();
-  }, [stopTimedMode]);
-
   // ── Inicializar fretboard quiz al entrar en modo quiz ─────────────────────
   useEffect(() => {
     if (screenMode === 'quiz') {
@@ -650,8 +581,8 @@ export default function ScalesScreen() {
       spawnFretboardQuestion(fretboardDifficultyRef.current);
       setFretboardScore({ correct: 0, total: 0 });
       setStreak(0);
-    } else {
-      if (fretboardAdvanceRef.current) clearTimeout(fretboardAdvanceRef.current);
+    } else if (fretboardAdvanceRef.current) {
+      clearTimeout(fretboardAdvanceRef.current);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenMode, spawnFretboardQuestion]);
@@ -781,9 +712,9 @@ export default function ScalesScreen() {
     : { inScale: false, degreeIdx: -1 };
 
   // ── Índice cromático de la nota detectada (para iluminar el mástil) ──────
-  const playedNoteIdx = detectionData.actualNote != null
-    ? (NOTE_CHROMA_MAP[detectionData.actualNote] ?? -1)
-    : -1;
+  const playedNoteIdx = detectionData.actualNote == null
+    ? -1
+    : (NOTE_CHROMA_MAP[detectionData.actualNote] ?? -1);
 
   // ── Animación de pulso para la nota activa ────────────────────────────────
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -1688,7 +1619,7 @@ export default function ScalesScreen() {
             )
           ) : (
             <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600', fontFamily: 'monospace' }}>
-              Avg {recognitionAverageMs != null ? `${Math.round(recognitionAverageMs)} ms` : '--'}
+              Avg {recognitionAverageMs == null ? '--' : `${Math.round(recognitionAverageMs)} ms`}
             </Text>
           )}
           {streak > 0 && (
@@ -2050,11 +1981,14 @@ export default function ScalesScreen() {
             </TouchableOpacity>
           </View>
           <Text style={{ color: colors.text, fontSize: 13, marginTop: 4 }}>
-            Average: {recognitionAverageMs != null ? `${Math.round(recognitionAverageMs)} ms` : 'No data yet'}
+            Average: {recognitionAverageMs == null ? 'No data yet' : `${Math.round(recognitionAverageMs)} ms`}
           </Text>
           <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 2 }}>
             {slowNoteCandidates.length > 0
-              ? `Slowest notes: ${slowNoteCandidates.map((entry) => `${entry.noteName} (${Math.round(entry.avgMs)} ms)`).join('  ·  ')}`
+              ? `Slowest notes: ${slowNoteCandidates.map((entry) => {
+                const avgMs = Math.round(entry.avgMs);
+                return `${entry.noteName} (${avgMs} ms)`;
+              }).join('  ·  ')}`
               : 'Slowest notes: play at least 2 successful attempts per note to unlock focus mode'}
           </Text>
         </View>
