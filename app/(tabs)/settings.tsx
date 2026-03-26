@@ -127,6 +127,71 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* User Manual Section */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionTitle, { color: colors.primary }]}>User Manual</Text>
+
+          {/* Tuner */}
+          <View style={[styles.manualCard, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder }]}>
+            <Text style={[styles.manualTabTitle, { color: colors.primary }]}>🎸  Tuner</Text>
+            <Text style={[styles.manualDesc, { color: colors.text }]}>
+              Real-time pitch detection from the microphone. Switch between{' '}
+              <Text style={{ fontWeight: '700' }}>Tuning</Text> mode for regular string tuning and{' '}
+              <Text style={{ fontWeight: '700' }}>Intonation</Text> mode to check fret-by-fret accuracy during guitar setup.
+            </Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Chromatic detection with cents offset display</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Multiple tuning presets (Standard, Drop D, Open G, DADGAD…)</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Auto and manual string selection</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Haptic feedback when in tune</Text>
+          </View>
+
+          {/* Scales & Modes */}
+          <View style={[styles.manualCard, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder }]}>
+            <Text style={[styles.manualTabTitle, { color: colors.primary }]}>🎼  Scales & Modes</Text>
+            <Text style={[styles.manualDesc, { color: colors.text }]}>
+              Three practice modes for modes, pentatonics and fretboard knowledge. Pick root + mode at the top — everything below updates in real time.
+            </Text>
+
+            <Text style={[styles.manualSubtitle, { color: colors.text }]}>Practice</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• 3-notes-per-string fretboard diagram for any mode</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Pentatonic view with diatonic chord + pentatonic fretboard</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Live note detection — dots light up as you play</Text>
+
+            <Text style={[styles.manualSubtitle, { color: colors.text }]}>Guide</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Plays you through the scale one note at a time (ascending or descending)</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Works for modes AND pentatonics (Major / Minor toggle)</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• String + fret hint shown for every note</Text>
+
+            <Text style={[styles.manualSubtitle, { color: colors.text }]}>Quiz</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Fretboard quiz: identify a note shown on the neck (Easy / Medium / Hard)</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Guitar quiz: play the asked scale degree on your guitar — mic evaluates it</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• By-fret drill: all 6 strings shown for a fret — builds positional awareness</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Mastery tracking: positions answered in {'<'}2 s are marked memorised and excluded</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Export attempt log as CSV for your own analysis</Text>
+          </View>
+
+          {/* Metronome */}
+          <View style={[styles.manualCard, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder }]}>
+            <Text style={[styles.manualTabTitle, { color: colors.primary }]}>🥁  Metronome</Text>
+            <Text style={[styles.manualDesc, { color: colors.text }]}>
+              Steady click with visual beat indicator. Tap the BPM display to enter a tempo directly, or use the +/− buttons.
+            </Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• 40–240 BPM range</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Quick presets: Slow / Medium / Fast / Very fast</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Time signatures: 3/4, 4/4, 5/4, 6/4</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Beat 1 accented for easier counting</Text>
+          </View>
+
+          {/* Settings */}
+          <View style={[styles.manualCard, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder }]}>
+            <Text style={[styles.manualTabTitle, { color: colors.primary }]}>⚙️  Settings (here)</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Reference pitch: 432 Hz, 440 Hz (standard), 443 Hz</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Detection sensitivity: adjust to filter background noise</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• Theme: Night (dark) or Day (light)</Text>
+            <Text style={[styles.manualBullet, { color: colors.textSecondary }]}>• All settings saved automatically</Text>
+          </View>
+        </View>
+
         {/* About Section */}
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.primary }]}>About</Text>
@@ -254,5 +319,35 @@ const styles = StyleSheet.create({
     fontSize: 11,
     textAlign: 'center',
     marginTop: 4,
+  },
+  manualCard: {
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
+  manualTabTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 8,
+    letterSpacing: 0.3,
+  },
+  manualSubtitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 10,
+    marginBottom: 4,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  manualDesc: {
+    fontSize: 14,
+    lineHeight: 21,
+    marginBottom: 8,
+  },
+  manualBullet: {
+    fontSize: 13,
+    lineHeight: 20,
+    marginBottom: 2,
   },
 });
