@@ -48,10 +48,12 @@ import {
 } from '@/src/utils/practice-storage';
 import {
   buildGuideSequence,
+  buildPentatonicGuideSequence,
   cycleNext,
   cyclePrev,
   getScaleInfo,
   makeChallenge,
+  PENTATONIC_INFO,
   type ChallengeType,
 } from '@/src/utils/scales-practice';
 import * as FileSystem from 'expo-file-system';
@@ -146,6 +148,7 @@ export default function ScalesScreen() {
   const [showModeGuide, setShowModeGuide] = useState(false);
   const [selectedChordIdx, setSelectedChordIdx] = useState(0);
   const [practiceType, setPracticeType] = useState<'modes' | 'pentatonics'>('modes');
+  const practiceTypeRef = useRef<'modes' | 'pentatonics'>('modes');
 
   // Estado de audio / detección
   const [isListening, setIsListening] = useState(true);
@@ -267,9 +270,11 @@ export default function ScalesScreen() {
   const [guideDirection, setGuideDirection] = useState<'asc' | 'desc'>('asc');
   const [guidePosition, setGuidePosition] = useState(0);
   const [guideStatus, setGuideStatus] = useState<'waiting' | 'hit' | 'done'>('waiting');
+  const [guidePentatonicType, setGuidePentatonicType] = useState<'major' | 'minor'>('minor');
   const guidePositionRef = useRef(0);
   const guideStatusRef = useRef<'waiting' | 'hit' | 'done'>('waiting');
   const guideDirectionRef = useRef<'asc' | 'desc'>('asc');
+  const guidePentatonicTypeRef = useRef<'major' | 'minor'>('minor');
 
   // ── Estado modo Quiz Timed ───────────────────────────────────────────────
   const [isTimedMode, setIsTimedMode] = useState(false);
@@ -496,7 +501,9 @@ export default function ScalesScreen() {
   (modePanResponder as any)._onSwipe = (dir: 1 | -1) => cycleParentModeRef.current(dir);
 
   // Secuencia del modo Guide (recalculada cuando cambia root/modo/dirección)
-  const guideSequence = buildGuideSequence(rootNote, modeKey, guideDirection);
+  const guideSequence = practiceType === 'pentatonics'
+    ? buildPentatonicGuideSequence(rootNote, guidePentatonicType, guideDirection)
+    : buildGuideSequence(rootNote, modeKey, guideDirection);
   const currentGuideNote = guideSequence[guidePosition] ?? guideSequence[0];
 
   // ── Audio setup (igual que el tuner) ────────────────────────────────────
@@ -552,6 +559,8 @@ export default function ScalesScreen() {
   useEffect(() => { guidePositionRef.current = guidePosition; }, [guidePosition]);
   useEffect(() => { guideStatusRef.current = guideStatus; }, [guideStatus]);
   useEffect(() => { guideDirectionRef.current = guideDirection; }, [guideDirection]);
+  useEffect(() => { guidePentatonicTypeRef.current = guidePentatonicType; }, [guidePentatonicType]);
+  useEffect(() => { practiceTypeRef.current = practiceType; }, [practiceType]);
   useEffect(() => { isTimedModeRef.current = isTimedMode; }, [isTimedMode]);
   useEffect(() => { timedRunningRef.current = timedRunning; }, [timedRunning]);
   useEffect(() => { timedBpmRef.current = timedBpm; }, [timedBpm]);
@@ -572,14 +581,14 @@ export default function ScalesScreen() {
     }
   }, [rootNote, modeKey, spawnGuitarChallenge]);
 
-  // Reiniciar posición al cambiar dirección en guide
+  // Reiniciar posición al cambiar dirección, tipo de pentatónica o tipo de práctica en guide
   useEffect(() => {
     setGuidePosition(0);
     guidePositionRef.current = 0;
     setGuideStatus('waiting');
     guideStatusRef.current = 'waiting';
     hasEvaluatedRef.current = false;
-  }, [guideDirection]);
+  }, [guideDirection, guidePentatonicType, practiceType]);
 
   // ── Metrónomo del modo Quiz Timed ────────────────────────────────────────
   const stopTimedMode = useCallback(() => {
@@ -728,11 +737,9 @@ export default function ScalesScreen() {
       guideStatusRef.current === 'waiting' &&
       !hasEvaluatedRef.current
     ) {
-      const seq = buildGuideSequence(
-        rootNoteRef.current,
-        modeKeyRef.current,
-        guideDirectionRef.current
-      );
+      const seq = practiceTypeRef.current === 'pentatonics'
+        ? buildPentatonicGuideSequence(rootNoteRef.current, guidePentatonicTypeRef.current, guideDirectionRef.current)
+        : buildGuideSequence(rootNoteRef.current, modeKeyRef.current, guideDirectionRef.current);
       const pos = guidePositionRef.current;
       if (pos < seq.length) {
         const { inScale: isHit } = getScaleInfo(
@@ -959,58 +966,8 @@ export default function ScalesScreen() {
         </View>
         )}
 
-        {/* ── What are modes? (oculto en Quiz) ── */}
-        {screenMode !== 'quiz' && (<>
-        <TouchableOpacity
-          style={[styles.modeGuideToggle, { borderColor: colors.buttonBorder }]}
-          onPress={() => setShowModeGuide(v => !v)}
-        >
-          <Text style={[styles.modeGuideToggleText, { color: colors.textSecondary }]}>
-            ℹ  What are modes?
-          </Text>
-          <Text style={[styles.modeGuideToggleText, { color: colors.textSecondary }]}>
-            {showModeGuide ? '▲' : '▼'}
-          </Text>
-        </TouchableOpacity>
-
-        {showModeGuide && (
-          <View style={[styles.modeGuidePanel, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder }]}>
-            <Text style={[styles.modeGuideLead, { color: colors.text }]}>
-              Modes are 7 scales derived from the major scale, each starting on a different degree.
-              They share the same notes as their parent scale but with a different root, creating a completely different sound.
-            </Text>
-            <Text style={[styles.modeGuideKey, { color: colors.primary, borderColor: colors.buttonBorder }]}>
-              Key insight: A Ionian and A Dorian are different scales — same root, different notes. But C Ionian and D Dorian share the same notes (both belong to C major).
-            </Text>
-            {Object.entries(MODES).map(([key, m]) => (
-              <View
-                key={key}
-                style={[
-                  styles.modeGuideRow,
-                  key === modeKey && { backgroundColor: colors.primary + '18', borderRadius: 8 },
-                ]}
-              >
-                <Text style={[styles.modeGuideEmoji]}>{m.emoji}</Text>
-                <View style={styles.modeGuideRowText}>
-                  <Text style={[styles.modeGuideRowTitle, { color: key === modeKey ? colors.primary : colors.text }]}>
-                    {m.name}{'  '}
-                    <Text style={[styles.modeGuideRowDegree, { color: colors.textSecondary }]}>
-                      ({m.altName})
-                    </Text>
-                  </Text>
-                  <Text style={[styles.modeGuideRowDesc, { color: colors.textSecondary }]}>
-                    {(m as any).description}
-                  </Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        )}
-        </>)}
-        {/* ══════════ MODO PRACTICE ══════════ */}
-        {screenMode === 'practice' && (<>
-
-        {/* ── Sub-toggle: Modes / Pentatonics ── */}
+        {/* ── Sub-toggle: Modes / Pentatonics (oculto en Quiz) ── */}
+        {screenMode !== 'quiz' && (
         <View style={[styles.modeToggle, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder, marginTop: 6 }]}>
           <TouchableOpacity
             style={[styles.toggleBtn, practiceType === 'modes' && { backgroundColor: colors.primary }]}
@@ -1029,6 +986,90 @@ export default function ScalesScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+        )}
+
+        {/* ── What are modes / pentatonics? (oculto en Quiz) ── */}
+        {screenMode !== 'quiz' && (<>
+        <TouchableOpacity
+          style={[styles.modeGuideToggle, { borderColor: colors.buttonBorder }]}
+          onPress={() => setShowModeGuide(v => !v)}
+        >
+          <Text style={[styles.modeGuideToggleText, { color: colors.textSecondary }]}>
+            ℹ  {practiceType === 'pentatonics' ? 'What are pentatonics?' : 'What are modes?'}
+          </Text>
+          <Text style={[styles.modeGuideToggleText, { color: colors.textSecondary }]}>
+            {showModeGuide ? '▲' : '▼'}
+          </Text>
+        </TouchableOpacity>
+
+        {showModeGuide && (
+          <View style={[styles.modeGuidePanel, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder }]}>
+            {practiceType === 'pentatonics' ? (
+              <>
+                <Text style={[styles.modeGuideLead, { color: colors.text }]}>
+                  Pentatonic scales use 5 notes instead of 7, removing the most dissonant intervals. Every note works over the underlying chord, making them ideal for improvisation.
+                </Text>
+                {Object.entries(PENTATONIC_INFO).map(([key, p]) => (
+                  <View
+                    key={key}
+                    style={[
+                      styles.modeGuideRow,
+                      key === guidePentatonicType && { backgroundColor: colors.primary + '18', borderRadius: 8 },
+                    ]}
+                  >
+                    <Text style={[styles.modeGuideEmoji]}>{p.emoji}</Text>
+                    <View style={styles.modeGuideRowText}>
+                      <Text style={[styles.modeGuideRowTitle, { color: key === guidePentatonicType ? colors.primary : colors.text }]}>
+                        {p.name}{'  '}
+                        <Text style={[styles.modeGuideRowDegree, { color: colors.textSecondary }]}>
+                          ({p.intervals})
+                        </Text>
+                      </Text>
+                      <Text style={[styles.modeGuideRowDesc, { color: colors.textSecondary }]}>
+                        {p.description}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </>
+            ) : (
+              <>
+                <Text style={[styles.modeGuideLead, { color: colors.text }]}>
+                  Modes are 7 scales derived from the major scale, each starting on a different degree.
+                  They share the same notes as their parent scale but with a different root, creating a completely different sound.
+                </Text>
+                <Text style={[styles.modeGuideKey, { color: colors.primary, borderColor: colors.buttonBorder }]}>
+                  Key insight: A Ionian and A Dorian are different scales — same root, different notes. But C Ionian and D Dorian share the same notes (both belong to C major).
+                </Text>
+                {Object.entries(MODES).map(([key, m]) => (
+                  <View
+                    key={key}
+                    style={[
+                      styles.modeGuideRow,
+                      key === modeKey && { backgroundColor: colors.primary + '18', borderRadius: 8 },
+                    ]}
+                  >
+                    <Text style={[styles.modeGuideEmoji]}>{m.emoji}</Text>
+                    <View style={styles.modeGuideRowText}>
+                      <Text style={[styles.modeGuideRowTitle, { color: key === modeKey ? colors.primary : colors.text }]}>
+                        {m.name}{'  '}
+                        <Text style={[styles.modeGuideRowDegree, { color: colors.textSecondary }]}>
+                          ({m.altName})
+                        </Text>
+                      </Text>
+                      <Text style={[styles.modeGuideRowDesc, { color: colors.textSecondary }]}>
+                        {(m as any).description}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </>
+            )}
+          </View>
+        )}
+        </>)}
+        {/* ══════════ MODO PRACTICE ══════════ */}
+        {screenMode === 'practice' && (<>
 
         {/* ── Contenido Modes ── */}
         {practiceType === 'modes' && (<>
@@ -1456,6 +1497,28 @@ export default function ScalesScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* ── Toggle Major / Minor (solo en pentatónicas) ── */}
+        {practiceType === 'pentatonics' && (
+        <View style={[styles.modeToggle, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder, marginTop: 6 }]}>
+          <TouchableOpacity
+            style={[styles.toggleBtn, guidePentatonicType === 'major' && { backgroundColor: colors.primary }]}
+            onPress={() => setGuidePentatonicType('major')}
+          >
+            <Text style={[styles.toggleText, { color: guidePentatonicType === 'major' ? colors.textOnPrimary : colors.textSecondary }]}>
+              ☀️  Major
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.toggleBtn, guidePentatonicType === 'minor' && { backgroundColor: colors.primary }]}
+            onPress={() => setGuidePentatonicType('minor')}
+          >
+            <Text style={[styles.toggleText, { color: guidePentatonicType === 'minor' ? colors.textOnPrimary : colors.textSecondary }]}>
+              🌑  Minor
+            </Text>
+          </TouchableOpacity>
+        </View>
+        )}
+
         {/* ── Barra de progreso (18 puntos) ── */}
         <View style={styles.guideProgressRow}>
           {guideSequence.map((_, i) => (
@@ -1486,7 +1549,10 @@ export default function ScalesScreen() {
               Scale complete!
             </Text>
             <Text style={[styles.guideCompleteSub, { color: colors.textSecondary }]}>
-              {getRootNoteDisplay(rootNote, modeKey)} {mode.name} · 18 notes
+              {practiceType === 'pentatonics'
+                ? `${getRootNoteDisplay(rootNote, modeKey)} ${PENTATONIC_INFO[guidePentatonicType].name} · ${guideSequence.length} notes`
+                : `${getRootNoteDisplay(rootNote, modeKey)} ${mode.name} · ${guideSequence.length} notes`
+              }
             </Text>
             <TouchableOpacity
               style={[styles.nextBtn, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder, marginHorizontal: 0, marginTop: 16, alignSelf: 'stretch' }]}

@@ -2,6 +2,8 @@ import {
   getScaleNoteNames,
   getScaleNotes,
   getThreeNotesPerString,
+  getPentatonicPattern,
+  ROOT_NOTES,
 } from '@/src/constants/scales';
 
 export type ChallengeType = {
@@ -117,4 +119,50 @@ export function cyclePrev<T>(arr: T[], current: T): T {
 export function cycleNext<T>(arr: T[], current: T): T {
   const idx = arr.indexOf(current);
   return arr[(idx + 1) % arr.length];
+}
+
+export const PENTATONIC_INFO: Record<string, {
+  emoji: string;
+  name: string;
+  intervals: string;
+  description: string;
+}> = {
+  major: {
+    emoji: '☀️',
+    name: 'Major Pentatonic',
+    intervals: '1 – 2 – 3 – 5 – 6',
+    description: '5-note subset of the major scale (removes the 4th & 7th). Bright, uplifting, country-flavored. Great for soloing over major chords.',
+  },
+  minor: {
+    emoji: '🌑',
+    name: 'Minor Pentatonic',
+    intervals: '1 – ♭3 – 4 – 5 – ♭7',
+    description: 'The most-used scale in rock, blues, and pop. 5 notes, zero tension — every note sounds good. Think "Smoke on the Water" or virtually any rock solo.',
+  },
+};
+
+export function buildPentatonicGuideSequence(
+  rootNote: string,
+  pentatonicType: 'major' | 'minor',
+  direction: 'asc' | 'desc'
+): GuideNote[] {
+  const rootIdx = ROOT_NOTES.indexOf(rootNote);
+  const pattern = getPentatonicPattern(rootIdx, pentatonicType, rootIdx) as Array<{
+    stringNumber: number;
+    notes: Array<{ fret: number; noteName: string; noteNameSharp: string; isRoot: boolean; degree: number }>;
+  }>;
+
+  const sequence: GuideNote[] = [];
+  for (const str of pattern) {
+    for (const note of str.notes) {
+      sequence.push({
+        stringNumber: str.stringNumber,
+        fret: note.fret,
+        noteName: note.noteName,
+        noteIdx: ROOT_NOTES.indexOf(note.noteNameSharp),
+        degree: note.degree,
+      });
+    }
+  }
+  return direction === 'desc' ? [...sequence].reverse() : sequence;
 }
