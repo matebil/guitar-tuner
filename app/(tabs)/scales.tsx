@@ -52,56 +52,17 @@ import {
   cycleNext,
   cyclePrev,
   getScaleInfo,
-  makeChallenge,
-  PENTATONIC_INFO,
-  type ChallengeType,
-} from '@/src/utils/scales-practice';
-import * as FileSystem from 'expo-file-system/legacy';
-import { setAudioModeAsync } from 'expo-audio';
-import * as Haptics from 'expo-haptics';
-import { useFocusEffect } from 'expo-router';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Animated,
-  Alert,
-  AppState,
-  PanResponder,
-  Platform,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-
-// ─── Constantes de layout del mástil ───────────────────────────────────────
-const FRET_WIDTH = 46;
-const STRING_HEIGHT = 34;
-const DOT_SIZE = 26;
-const LABEL_WIDTH = 26;
-
-// Orden cromático (sharps) — mismo que tunings.js
-const NOTE_NAMES_SHARP = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-
-// Mapeo de nombre de nota (sharp y flat) → índice cromático 0-11
-const NOTE_CHROMA_MAP: Record<string, number> = {
-  C: 0, 'C#': 1, Db: 1, D: 2, 'D#': 3, Eb: 3, E: 4,
-  F: 5, 'F#': 6, Gb: 6, G: 7, 'G#': 8, Ab: 8, A: 9, 'A#': 10, Bb: 10, B: 11,
-};
-
-
-// Etiquetas de cuerdas en orden de tab (cuerda 1 arriba)
-const STRING_LABELS = ['e', 'B', 'G', 'D', 'A', 'E'];
-
-// Orden de modos
-const MODE_KEYS = [
-  'ionian',
-  'dorian',
-  'phrygian',
-  'lydian',
-  'mixolydian',
+                return renderByFretCell({
+                  f,
+                  sIdx,
+                  qStringIdx,
+                  questionFret: fretboardQ.fret,
+                  isRevealed,
+                  answeredCorrectly,
+                  colors,
+                  cellW: CELL_W,
+                  cellH: CELL_H,
+                });
   'aeolian',
   'locrian',
 ];
@@ -135,6 +96,289 @@ function getAdjacentParentMode(
   const nextModeKey = MODE_KEYS[nextModeIdx];
   const newRootIdx = (parentRootIdx + MODE_SEMITONE_OFFSET[nextModeKey]) % 12;
   return { root: NOTE_NAMES_SHARP[newRootIdx], mode: nextModeKey };
+}
+
+function renderModeFretCell(params: {
+  f: number;
+  note: any;
+  colors: any;
+  playedNoteIdx: number;
+  detectedInScale: boolean;
+  pulseAnim: Animated.Value;
+}): React.ReactNode {
+  const { f, note, colors, playedNoteIdx, detectedInScale, pulseAnim } = params;
+  const isNut = f === 0;
+  let noteDot: React.ReactNode = null;
+
+  if (note) {
+    const isPlayed = playedNoteIdx !== -1 && NOTE_NAMES_SHARP.indexOf(note.noteNameSharp) === playedNoteIdx;
+    const isRoot = Boolean(note.isRoot);
+
+    let dotBg = isRoot ? colors.primary : colors.secondary;
+    let dotBorder = isRoot ? colors.primaryBorder : colors.buttonBorder;
+    let dotTextColor = isRoot ? colors.textOnPrimary : colors.text;
+    let dotBorderWidth = isRoot ? 2 : 1;
+    let dotOpacity: number | Animated.Value = 1;
+    let dotTransform: { scale: Animated.AnimatedInterpolation<number> }[] = [];
+
+    if (isPlayed) {
+      dotBg = detectedInScale ? '#22c55e' : colors.sharp;
+      dotBorder = detectedInScale ? '#16a34a' : colors.sharp;
+      dotTextColor = '#fff';
+      dotBorderWidth = 2.5;
+      dotOpacity = pulseAnim;
+      dotTransform = [{
+        scale: pulseAnim.interpolate({
+          inputRange: [0.45, 1],
+          outputRange: [1, 1.22],
+        }),
+      }];
+    }
+
+    noteDot = (
+      <Animated.View
+        style={{
+          width: DOT_SIZE,
+          height: DOT_SIZE,
+          borderRadius: DOT_SIZE / 2,
+          backgroundColor: dotBg,
+          borderWidth: dotBorderWidth,
+          borderColor: dotBorder,
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1,
+          opacity: dotOpacity,
+          transform: dotTransform,
+        }}
+      >
+        <Text
+          style={{
+            color: dotTextColor,
+            fontSize: note.noteName.length > 2 ? 7 : 9,
+            fontWeight: 'bold',
+            fontFamily: 'monospace',
+          }}
+        >
+          {note.noteName}
+        </Text>
+      </Animated.View>
+    );
+  }
+
+  return (
+    <View
+      key={f}
+      style={{
+        width: FRET_WIDTH,
+        height: STRING_HEIGHT,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderLeftWidth: isNut ? 3 : 1,
+        borderLeftColor: isNut ? colors.text : colors.buttonBorder,
+      }}
+    >
+      <View
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          height: 1.5,
+          backgroundColor: colors.buttonBorder,
+          opacity: 0.8,
+        }}
+      />
+      {noteDot}
+    </View>
+  );
+}
+
+function renderPentatonicFretCell(params: {
+  f: number;
+  note: any;
+  colors: any;
+  playedNoteIdx: number;
+  pentNoteIdxSet: Set<number>;
+  pulseAnim: Animated.Value;
+}): React.ReactNode {
+  const { f, note, colors, playedNoteIdx, pentNoteIdxSet, pulseAnim } = params;
+  const isNut = f === 0;
+  let noteDot: React.ReactNode = null;
+
+  if (note) {
+    const noteIdx = NOTE_CHROMA_MAP[note.noteName] ?? -1;
+    const isPlayed = playedNoteIdx !== -1 && noteIdx === playedNoteIdx;
+    const isInPentatonic = isPlayed ? pentNoteIdxSet.has(playedNoteIdx) : true;
+    const isRoot = Boolean(note.isRoot);
+
+    let dotBg = isRoot ? colors.primary : colors.secondary;
+    let dotBorder = isRoot ? colors.primaryBorder : colors.buttonBorder;
+    let dotTextColor = isRoot ? colors.textOnPrimary : colors.text;
+    let dotBorderWidth = isRoot ? 2 : 1;
+    let dotOpacity: number | Animated.Value = 1;
+    let dotTransform: { scale: Animated.AnimatedInterpolation<number> }[] = [];
+
+    if (isPlayed) {
+      dotBg = isInPentatonic ? '#22c55e' : colors.sharp;
+      dotBorder = isInPentatonic ? '#16a34a' : colors.sharp;
+      dotTextColor = '#fff';
+      dotBorderWidth = 2.5;
+      dotOpacity = pulseAnim;
+      dotTransform = [{
+        scale: pulseAnim.interpolate({
+          inputRange: [0.45, 1],
+          outputRange: [1, 1.22],
+        }),
+      }];
+    }
+
+    noteDot = (
+      <Animated.View
+        style={{
+          width: DOT_SIZE,
+          height: DOT_SIZE,
+          borderRadius: DOT_SIZE / 2,
+          backgroundColor: dotBg,
+          borderWidth: dotBorderWidth,
+          borderColor: dotBorder,
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1,
+          opacity: dotOpacity,
+          transform: dotTransform,
+        }}
+      >
+        <Text
+          style={{
+            color: dotTextColor,
+            fontSize: note.noteName.length > 2 ? 7 : 9,
+            fontWeight: 'bold',
+            fontFamily: 'monospace',
+          }}
+        >
+          {note.noteName}
+        </Text>
+      </Animated.View>
+    );
+  }
+
+  return (
+    <View
+      key={f}
+      style={{
+        width: FRET_WIDTH,
+        height: STRING_HEIGHT,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderLeftWidth: isNut ? 3 : 1,
+        borderLeftColor: isNut ? colors.text : colors.buttonBorder,
+      }}
+    >
+      <View
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          height: 1.5,
+          backgroundColor: colors.buttonBorder,
+          opacity: 0.8,
+        }}
+      />
+      {noteDot}
+    </View>
+  );
+}
+
+function renderByFretCell(params: {
+  f: number;
+  sIdx: number;
+  qStringIdx: number;
+  questionFret: number;
+  isRevealed: boolean;
+  answeredCorrectly: boolean;
+  correctNote: string;
+  colors: any;
+  cellW: number;
+  cellH: number;
+}): React.ReactNode {
+  const {
+    f,
+    sIdx,
+    qStringIdx,
+    questionFret,
+    isRevealed,
+    answeredCorrectly,
+    correctNote,
+    colors,
+    cellW,
+    cellH,
+  } = params;
+
+  const isQuestion = sIdx === qStringIdx && f === questionFret;
+  let thickness = 1;
+  if (sIdx >= 3) {
+    thickness = sIdx === 5 ? 2.5 : 2;
+  }
+
+  let questionBg = 'transparent';
+  if (isQuestion && isRevealed) {
+    questionBg = answeredCorrectly ? colors.inTune + '22' : colors.sharp + '22';
+  }
+
+  let questionDotBg = colors.primary;
+  if (isRevealed) {
+    questionDotBg = answeredCorrectly ? colors.inTune : colors.sharp;
+  }
+
+  return (
+    <View
+      key={f}
+      style={{
+        width: cellW,
+        height: cellH,
+        borderLeftWidth: f === 0 ? 4 : 0,
+        borderLeftColor: colors.text,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: questionBg,
+      }}
+    >
+      {f > 0 && (
+        <View style={{ position: 'absolute', left: 0, top: 4, bottom: 4, width: 1, backgroundColor: colors.buttonBorder + '66' }} />
+      )}
+      <View
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: cellH / 2 - thickness / 2,
+          height: thickness,
+          backgroundColor: colors.textSecondary + '55',
+        }}
+      />
+      {isQuestion && (
+        <View
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 16,
+            backgroundColor: questionDotBg,
+            justifyContent: 'center',
+            alignItems: 'center',
+            zIndex: 2,
+            shadowColor: colors.primary,
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: isRevealed ? 0 : 0.5,
+            shadowRadius: 4,
+            elevation: isRevealed ? 0 : 4,
+          }}
+        >
+          <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: isRevealed ? 10 : 18 }}>
+            {isRevealed ? correctNote : '?'}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
 }
 
 // ─── Componente principal ───────────────────────────────────────────────────
@@ -1044,92 +1288,14 @@ export default function ScalesScreen() {
               {/* Celdas de traste */}
               {fretRange.map((f) => {
                 const note = string.notes.find((n: any) => n.fret === f);
-                const isNut = f === 0;
-                let noteDot: React.ReactNode = null;
-
-                if (note) {
-                  const isPlayed = playedNoteIdx !== -1 &&
-                    NOTE_NAMES_SHARP.indexOf(note.noteNameSharp) === playedNoteIdx;
-                  const isRoot = Boolean(note.isRoot);
-
-                  let dotBg = isRoot ? colors.primary : colors.secondary;
-                  let dotBorder = isRoot ? colors.primaryBorder : colors.buttonBorder;
-                  let dotTextColor = isRoot ? colors.textOnPrimary : colors.text;
-                  let dotBorderWidth = isRoot ? 2 : 1;
-                  let dotOpacity: number | Animated.Value = 1;
-                  let dotTransform: { scale: Animated.AnimatedInterpolation<number> }[] = [];
-
-                  if (isPlayed) {
-                    dotBg = detectedInScale ? '#22c55e' : colors.sharp;
-                    dotBorder = detectedInScale ? '#16a34a' : colors.sharp;
-                    dotTextColor = '#fff';
-                    dotBorderWidth = 2.5;
-                    dotOpacity = pulseAnim;
-                    dotTransform = [{
-                      scale: pulseAnim.interpolate({
-                        inputRange: [0.45, 1],
-                        outputRange: [1, 1.22],
-                      }),
-                    }];
-                  }
-
-                  noteDot = (
-                    <Animated.View
-                      style={{
-                        width: DOT_SIZE,
-                        height: DOT_SIZE,
-                        borderRadius: DOT_SIZE / 2,
-                        backgroundColor: dotBg,
-                        borderWidth: dotBorderWidth,
-                        borderColor: dotBorder,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        zIndex: 1,
-                        opacity: dotOpacity,
-                        transform: dotTransform,
-                      }}
-                    >
-                      <Text
-                        style={{
-                          color: dotTextColor,
-                          fontSize: note.noteName.length > 2 ? 7 : 9,
-                          fontWeight: 'bold',
-                          fontFamily: 'monospace',
-                        }}
-                      >
-                        {note.noteName}
-                      </Text>
-                    </Animated.View>
-                  );
-                }
-
-                return (
-                  <View
-                    key={f}
-                    style={{
-                      width: FRET_WIDTH,
-                      height: STRING_HEIGHT,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      borderLeftWidth: isNut ? 3 : 1,
-                      borderLeftColor: isNut ? colors.text : colors.buttonBorder,
-                    }}
-                  >
-                    {/* Línea de cuerda */}
-                    <View
-                      style={{
-                        position: 'absolute',
-                        left: 0,
-                        right: 0,
-                        height: 1.5,
-                        backgroundColor: colors.buttonBorder,
-                        opacity: 0.8,
-                      }}
-                    />
-                    {/* Dot de nota */}
-                    {noteDot}
-                  </View>
-                );
+                return renderModeFretCell({
+                  f,
+                  note,
+                  colors,
+                  playedNoteIdx,
+                  detectedInScale,
+                  pulseAnim,
+                });
               })}
             </View>
           ))}
@@ -1275,91 +1441,14 @@ export default function ScalesScreen() {
                     </View>
                     {pentFretRange.map((f) => {
                       const note = string.notes.find((n: any) => n.fret === f);
-                      const isNut = f === 0;
-                      let noteDot: React.ReactNode = null;
-
-                      if (note) {
-                        const noteIdx = NOTE_CHROMA_MAP[note.noteName] ?? -1;
-                        const isPlayed = playedNoteIdx !== -1 && noteIdx === playedNoteIdx;
-                        const isInPentatonic = isPlayed ? pentNoteIdxSet.has(playedNoteIdx) : true;
-                        const isRoot = Boolean(note.isRoot);
-
-                        let dotBg = isRoot ? colors.primary : colors.secondary;
-                        let dotBorder = isRoot ? colors.primaryBorder : colors.buttonBorder;
-                        let dotTextColor = isRoot ? colors.textOnPrimary : colors.text;
-                        let dotBorderWidth = isRoot ? 2 : 1;
-                        let dotOpacity: number | Animated.Value = 1;
-                        let dotTransform: { scale: Animated.AnimatedInterpolation<number> }[] = [];
-
-                        if (isPlayed) {
-                          dotBg = isInPentatonic ? '#22c55e' : colors.sharp;
-                          dotBorder = isInPentatonic ? '#16a34a' : colors.sharp;
-                          dotTextColor = '#fff';
-                          dotBorderWidth = 2.5;
-                          dotOpacity = pulseAnim;
-                          dotTransform = [{
-                            scale: pulseAnim.interpolate({
-                              inputRange: [0.45, 1],
-                              outputRange: [1, 1.22],
-                            }),
-                          }];
-                        }
-
-                        noteDot = (
-                          <Animated.View
-                            style={{
-                              width: DOT_SIZE,
-                              height: DOT_SIZE,
-                              borderRadius: DOT_SIZE / 2,
-                              backgroundColor: dotBg,
-                              borderWidth: dotBorderWidth,
-                              borderColor: dotBorder,
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              zIndex: 1,
-                              opacity: dotOpacity,
-                              transform: dotTransform,
-                            }}
-                          >
-                            <Text
-                              style={{
-                                color: dotTextColor,
-                                fontSize: note.noteName.length > 2 ? 7 : 9,
-                                fontWeight: 'bold',
-                                fontFamily: 'monospace',
-                              }}
-                            >
-                              {note.noteName}
-                            </Text>
-                          </Animated.View>
-                        );
-                      }
-
-                      return (
-                        <View
-                          key={f}
-                          style={{
-                            width: FRET_WIDTH,
-                            height: STRING_HEIGHT,
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            borderLeftWidth: isNut ? 3 : 1,
-                            borderLeftColor: isNut ? colors.text : colors.buttonBorder,
-                          }}
-                        >
-                          <View
-                            style={{
-                              position: 'absolute',
-                              left: 0,
-                              right: 0,
-                              height: 1.5,
-                              backgroundColor: colors.buttonBorder,
-                              opacity: 0.8,
-                            }}
-                          />
-                          {noteDot}
-                        </View>
-                      );
+                      return renderPentatonicFretCell({
+                        f,
+                        note,
+                        colors,
+                        playedNoteIdx,
+                        pentNoteIdxSet,
+                        pulseAnim,
+                      });
                     })}
                   </View>
                 ))}
@@ -1851,54 +1940,18 @@ export default function ScalesScreen() {
                 <View key={label} style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <Text style={{ width: LABEL_W, color: colors.textSecondary, fontSize: 11, textAlign: 'right', paddingRight: 4 }}>{label}</Text>
                   {frets.map(f => {
-                    const isQuestion = sIdx === qStringIdx && f === fretboardQ.fret;
-                    let thickness = 1;
-                    if (sIdx >= 3) {
-                      thickness = sIdx === 5 ? 2.5 : 2;
-                    }
-                    let questionBg = 'transparent';
-                    if (isQuestion && isRevealed) {
-                      questionBg = answeredCorrectly ? colors.inTune + '22' : colors.sharp + '22';
-                    }
-                    let questionDotBg = colors.primary;
-                    if (isRevealed) {
-                      questionDotBg = answeredCorrectly ? colors.inTune : colors.sharp;
-                    }
-                    return (
-                      <View
-                        key={f}
-                        style={{
-                          width: CELL_W, height: CELL_H,
-                          borderLeftWidth: f === 0 ? 4 : 0,
-                          borderLeftColor: colors.text,
-                          justifyContent: 'center', alignItems: 'center',
-                          backgroundColor: questionBg,
-                        }}
-                      >
-                        {f > 0 && (
-                          <View style={{ position: 'absolute', left: 0, top: 4, bottom: 4, width: 1, backgroundColor: colors.buttonBorder + '66' }} />
-                        )}
-                        <View style={{
-                          position: 'absolute', left: 0, right: 0,
-                          top: CELL_H / 2 - thickness / 2,
-                          height: thickness,
-                          backgroundColor: colors.textSecondary + '55',
-                        }} />
-                        {isQuestion && (
-                          <View style={{
-                            width: 32, height: 32, borderRadius: 16,
-                            backgroundColor: questionDotBg,
-                            justifyContent: 'center', alignItems: 'center', zIndex: 2,
-                            shadowColor: colors.primary, shadowOffset: { width: 0, height: 2 },
-                            shadowOpacity: isRevealed ? 0 : 0.5, shadowRadius: 4, elevation: isRevealed ? 0 : 4,
-                          }}>
-                            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: isRevealed ? 10 : 18 }}>
-                              {isRevealed ? fretboardQ.correctNote : '?'}
-                            </Text>
-                          </View>
-                        )}
-                      </View>
-                    );
+                    return renderByFretCell({
+                      f,
+                      sIdx,
+                      qStringIdx,
+                      questionFret: fretboardQ.fret,
+                      isRevealed,
+                      answeredCorrectly,
+                      correctNote: fretboardQ.correctNote,
+                      colors,
+                      cellW: CELL_W,
+                      cellH: CELL_H,
+                    });
                   })}
                 </View>
                 );
