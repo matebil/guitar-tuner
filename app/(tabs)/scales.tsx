@@ -56,7 +56,7 @@ import {
   PENTATONIC_INFO,
   type ChallengeType,
 } from '@/src/utils/scales-practice';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { setAudioModeAsync } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 import { useFocusEffect } from 'expo-router';
@@ -450,7 +450,7 @@ export default function ScalesScreen() {
       .join('\n');
 
     const fileUri = `${FileSystem.cacheDirectory}matebil-fretboard-attempts-${Date.now()}.csv`;
-    await FileSystem.writeAsStringAsync(fileUri, csv, { encoding: FileSystem.EncodingType.UTF8 });
+    await (FileSystem as any).writeAsStringAsync(fileUri, csv, { encoding: FileSystem.EncodingType.UTF8 });
 
     await Share.share({
       url: fileUri,
@@ -871,20 +871,20 @@ export default function ScalesScreen() {
             {mode.characteristic}
           </Text>
           <View style={styles.noteChips}>
-            {scaleNoteNames.map((noteName: string, idx: number) => (
+            {scaleNoteNames.map((noteName: string) => (
               <View
-                key={idx}
+                key={noteName}
                 style={[
                   styles.noteChip,
                   {
-                    backgroundColor: idx === 0 ? colors.primary : colors.buttonBg,
-                    borderColor: idx === 0 ? colors.primaryBorder : colors.buttonBorder,
+                    backgroundColor: noteName === scaleNoteNames[0] ? colors.primary : colors.buttonBg,
+                    borderColor: noteName === scaleNoteNames[0] ? colors.primaryBorder : colors.buttonBorder,
                   },
                 ]}
               >
                 <Text style={[
                   styles.noteChipText,
-                  { color: idx === 0 ? colors.textOnPrimary : colors.text },
+                  { color: noteName === scaleNoteNames[0] ? colors.textOnPrimary : colors.text },
                 ]}>
                   {noteName}
                 </Text>
@@ -1157,21 +1157,32 @@ export default function ScalesScreen() {
 
         {/* Chord chips */}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 16, gap: 6, marginBottom: 8 }}>
-          {diatonicChords.map((chord: any, idx: number) => (
+          {diatonicChords.map((chord: any) => (
             <TouchableOpacity
-              key={idx}
-              onPress={() => setSelectedChordIdx(idx)}
+              key={`${chord.degree}-${chord.roman}-${chord.name}`}
+              onPress={() => {
+                const chordIndex = diatonicChords.findIndex((c: any) => c.degree === chord.degree && c.name === chord.name);
+                if (chordIndex >= 0) setSelectedChordIdx(chordIndex);
+              }}
               style={[
                 styles.noteChip,
                 {
-                  backgroundColor: selectedChordIdx === idx ? colors.primary : colors.buttonBg,
-                  borderColor: selectedChordIdx === idx ? colors.primaryBorder : colors.buttonBorder,
+                  backgroundColor: selectedChordIdx === diatonicChords.findIndex((c: any) => c.degree === chord.degree && c.name === chord.name)
+                    ? colors.primary
+                    : colors.buttonBg,
+                  borderColor: selectedChordIdx === diatonicChords.findIndex((c: any) => c.degree === chord.degree && c.name === chord.name)
+                    ? colors.primaryBorder
+                    : colors.buttonBorder,
                 },
               ]}
             >
               <Text style={[
                 styles.noteChipText,
-                { color: selectedChordIdx === idx ? colors.textOnPrimary : colors.text },
+                {
+                  color: selectedChordIdx === diatonicChords.findIndex((c: any) => c.degree === chord.degree && c.name === chord.name)
+                    ? colors.textOnPrimary
+                    : colors.text,
+                },
               ]}>
                 {chord.roman}{'\u00B7'}{chord.name}
               </Text>
@@ -1202,20 +1213,20 @@ export default function ScalesScreen() {
                   {chord.name} {'\u2192'} {chord.pentatonicLabel}
                 </Text>
                 <View style={styles.noteChips}>
-                  {pentNoteNames.map((name: string, idx: number) => (
+                  {pentNoteNames.map((name: string) => (
                     <View
-                      key={idx}
+                      key={name}
                       style={[
                         styles.noteChip,
                         {
-                          backgroundColor: idx === 0 ? colors.primary : colors.buttonBg,
-                          borderColor: idx === 0 ? colors.primaryBorder : colors.buttonBorder,
+                          backgroundColor: name === pentNoteNames[0] ? colors.primary : colors.buttonBg,
+                          borderColor: name === pentNoteNames[0] ? colors.primaryBorder : colors.buttonBorder,
                         },
                       ]}
                     >
                       <Text style={[
                         styles.noteChipText,
-                        { color: idx === 0 ? colors.textOnPrimary : colors.text },
+                        { color: name === pentNoteNames[0] ? colors.textOnPrimary : colors.text },
                       ]}>
                         {name}
                       </Text>
@@ -1386,11 +1397,13 @@ export default function ScalesScreen() {
                     letterSpacing: 0.5,
                   }}
                 >
-                  {detectedInScale
-                    ? (practiceType === 'pentatonics'
-                      ? '✓  In pentatonic'
-                      : `✓  In scale  ·  ${DEGREE_NAMES[detectedDegree]} (${ROMAN[detectedDegree]})`)
-                    : (practiceType === 'pentatonics' ? '✗  Out of pentatonic' : '✗  Out of scale')}
+                  {(() => {
+                    if (detectedInScale) {
+                      if (practiceType === 'pentatonics') return '✓  In pentatonic';
+                      return `✓  In scale  ·  ${DEGREE_NAMES[detectedDegree]} (${ROMAN[detectedDegree]})`;
+                    }
+                    return practiceType === 'pentatonics' ? '✗  Out of pentatonic' : '✗  Out of scale';
+                  })()}
                 </Text>
               </Animated.View>
             </>
@@ -1452,24 +1465,36 @@ export default function ScalesScreen() {
 
         {/* ── Barra de progreso (18 puntos) ── */}
         <View style={styles.guideProgressRow}>
-          {guideSequence.map((_, i) => (
+          {guideSequence.map((guideNote) => {
+            const dotIndex = guideSequence.findIndex(
+              (note) => note.stringNumber === guideNote.stringNumber
+                && note.fret === guideNote.fret
+                && note.degree === guideNote.degree
+            );
+            const isPast = dotIndex < guidePosition;
+            const isCurrent = dotIndex === guidePosition && guideStatus !== 'done';
+            let dotBg = colors.buttonBg;
+            let dotBorder = colors.buttonBorder;
+            if (isPast) {
+              dotBg = colors.primary;
+              dotBorder = colors.primaryBorder;
+            } else if (isCurrent) {
+              dotBg = colors.flat;
+              dotBorder = colors.flatBorder;
+            }
+            return (
             <View
-              key={i}
+              key={`${guideNote.stringNumber}-${guideNote.fret}-${guideNote.degree}`}
               style={[
                 styles.guideDot,
                 {
-                  backgroundColor:
-                    i < guidePosition ? colors.primary :
-                    i === guidePosition && guideStatus !== 'done' ? colors.flat :
-                    colors.buttonBg,
-                  borderColor:
-                    i < guidePosition ? colors.primaryBorder :
-                    i === guidePosition && guideStatus !== 'done' ? colors.flatBorder :
-                    colors.buttonBorder,
+                  backgroundColor: dotBg,
+                  borderColor: dotBorder,
                 },
               ]}
             />
-          ))}
+            );
+          })}
         </View>
 
         {guideStatus === 'done' ? (
@@ -1607,21 +1632,27 @@ export default function ScalesScreen() {
 
         {/* ── Encabezado: puntuación + racha ── */}
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, marginBottom: 8, marginTop: 8 }}>
-          {quizSubMode === 'fretboard' ? (
-            fretboardMode === 'single' ? (
-              <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>
-                {fretboardScore.correct}/{fretboardScore.total} ✓
+          {(() => {
+            if (quizSubMode === 'fretboard') {
+              if (fretboardMode === 'single') {
+                return (
+                  <Text style={{ color: colors.text, fontSize: 15, fontWeight: '700' }}>
+                    {fretboardScore.correct}/{fretboardScore.total} ✓
+                  </Text>
+                );
+              }
+              return (
+                <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '700' }}>
+                  Fret-by-fret study
+                </Text>
+              );
+            }
+            return (
+              <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600', fontFamily: 'monospace' }}>
+                Avg {recognitionAverageMs == null ? '--' : `${Math.round(recognitionAverageMs)} ms`}
               </Text>
-            ) : (
-              <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '700' }}>
-                Fret-by-fret study
-              </Text>
-            )
-          ) : (
-            <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600', fontFamily: 'monospace' }}>
-              Avg {recognitionAverageMs == null ? '--' : `${Math.round(recognitionAverageMs)} ms`}
-            </Text>
-          )}
+            );
+          })()}
           {streak > 0 && (
             <Text style={{ color: colors.primary, fontSize: 15, fontWeight: '700' }}>🔥 {streak}</Text>
           )}
@@ -1741,7 +1772,11 @@ export default function ScalesScreen() {
               ]}
             >
               <Text style={{ color: fretboardDifficulty === diff ? colors.textOnPrimary : colors.textSecondary, fontSize: 13, fontWeight: '600', textAlign: 'center' }}>
-                {diff === 'easy' ? 'Easy' : diff === 'medium' ? 'Medium' : 'Hard'}
+                {(() => {
+                  if (diff === 'easy') return 'Easy';
+                  if (diff === 'medium') return 'Medium';
+                  return 'Hard';
+                })()}
               </Text>
             </TouchableOpacity>
           ))}
@@ -1775,12 +1810,25 @@ export default function ScalesScreen() {
                   </View>
                 ))}
               </View>
-              {FB_STRING_LABELS.map((label, sIdx) => (
-                <View key={sIdx} style={{ flexDirection: 'row', alignItems: 'center' }}>
+              {FB_STRING_LABELS.map((label) => {
+                const sIdx = FB_STRING_LABELS.indexOf(label);
+                return (
+                <View key={label} style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <Text style={{ width: LABEL_W, color: colors.textSecondary, fontSize: 11, textAlign: 'right', paddingRight: 4 }}>{label}</Text>
                   {frets.map(f => {
                     const isQuestion = sIdx === qStringIdx && f === fretboardQ.fret;
-                    const thickness = sIdx >= 3 ? (sIdx === 5 ? 2.5 : 2) : 1;
+                    let thickness = 1;
+                    if (sIdx >= 3) {
+                      thickness = sIdx === 5 ? 2.5 : 2;
+                    }
+                    let questionBg = 'transparent';
+                    if (isQuestion && isRevealed) {
+                      questionBg = answeredCorrectly ? colors.inTune + '22' : colors.sharp + '22';
+                    }
+                    let questionDotBg = colors.primary;
+                    if (isRevealed) {
+                      questionDotBg = answeredCorrectly ? colors.inTune : colors.sharp;
+                    }
                     return (
                       <View
                         key={f}
@@ -1789,9 +1837,7 @@ export default function ScalesScreen() {
                           borderLeftWidth: f === 0 ? 4 : 0,
                           borderLeftColor: colors.text,
                           justifyContent: 'center', alignItems: 'center',
-                          backgroundColor: isQuestion && isRevealed
-                            ? (answeredCorrectly ? colors.inTune + '22' : colors.sharp + '22')
-                            : 'transparent',
+                          backgroundColor: questionBg,
                         }}
                       >
                         {f > 0 && (
@@ -1806,9 +1852,7 @@ export default function ScalesScreen() {
                         {isQuestion && (
                           <View style={{
                             width: 32, height: 32, borderRadius: 16,
-                            backgroundColor: isRevealed
-                              ? (answeredCorrectly ? colors.inTune : colors.sharp)
-                              : colors.primary,
+                            backgroundColor: questionDotBg,
                             justifyContent: 'center', alignItems: 'center', zIndex: 2,
                             shadowColor: colors.primary, shadowOffset: { width: 0, height: 2 },
                             shadowOpacity: isRevealed ? 0 : 0.5, shadowRadius: 4, elevation: isRevealed ? 0 : 4,
@@ -1822,7 +1866,8 @@ export default function ScalesScreen() {
                     );
                   })}
                 </View>
-              ))}
+                );
+              })}
             </View>
           );
         })()}
@@ -1833,15 +1878,18 @@ export default function ScalesScreen() {
             const isAnswered = fretboardAnswer !== null;
             const isCorrectOption = option === fretboardQ.correctNote;
             const isChosen = option === fretboardAnswer;
-            const bg = isAnswered && isCorrectOption
-              ? colors.inTune + '33'
-              : isAnswered && isChosen && !isCorrectOption ? colors.sharp + '22' : colors.buttonBg;
-            const border = isAnswered && isCorrectOption
-              ? colors.inTune
-              : isAnswered && isChosen && !isCorrectOption ? colors.sharp : colors.buttonBorder;
-            const textColor = isAnswered && isCorrectOption
-              ? colors.inTune
-              : isAnswered && isChosen && !isCorrectOption ? colors.sharp : colors.text;
+            let bg = colors.buttonBg;
+            let border = colors.buttonBorder;
+            let textColor = colors.text;
+            if (isAnswered && isCorrectOption) {
+              bg = colors.inTune + '33';
+              border = colors.inTune;
+              textColor = colors.inTune;
+            } else if (isAnswered && isChosen && !isCorrectOption) {
+              bg = colors.sharp + '22';
+              border = colors.sharp;
+              textColor = colors.sharp;
+            }
             return (
               <TouchableOpacity
                 key={option}
@@ -2059,23 +2107,40 @@ export default function ScalesScreen() {
           </TouchableOpacity>
         )}
 
+        {(() => {
+          let quizResultBg = colors.secondary;
+          let quizResultBorder = colors.buttonBorder;
+          let quizNoteColor = colors.text;
+          let quizSubColor = colors.textSecondary;
+
+          if (quizStatus === 'correct') {
+            quizResultBg = colors.inTune + '22';
+            quizResultBorder = colors.inTune;
+            quizNoteColor = colors.primary;
+            quizSubColor = colors.primary;
+          } else if (quizStatus === 'wrong') {
+            quizResultBg = colors.sharp + '22';
+            quizResultBorder = colors.sharp;
+            quizNoteColor = colors.sharp;
+            quizSubColor = colors.sharp;
+          }
+
+          return (
         <View style={[
           styles.quizResult,
           {
-            backgroundColor: quizStatus === 'correct' ? colors.inTune + '22' :
-              quizStatus === 'wrong' ? colors.sharp + '22' : colors.secondary,
-            borderColor: quizStatus === 'correct' ? colors.inTune :
-              quizStatus === 'wrong' ? colors.sharp : colors.buttonBorder,
+            backgroundColor: quizResultBg,
+            borderColor: quizResultBorder,
           },
         ]}>
           {detectionData.frequency ? (
             <>
               <Text style={{
-                color: quizStatus === 'correct' ? colors.primary : quizStatus === 'wrong' ? colors.sharp : colors.text,
+                color: quizNoteColor,
                 fontSize: 56, fontWeight: 'bold', fontFamily: 'monospace', lineHeight: 64,
               }}>{detectionData.actualNote}</Text>
               <Text style={{
-                color: quizStatus === 'correct' ? colors.primary : quizStatus === 'wrong' ? colors.sharp : colors.textSecondary,
+                color: quizSubColor,
                 fontSize: 13, fontWeight: '600', letterSpacing: 0.4, textAlign: 'center',
               }}>
                 {quizStatus === 'correct' && '✓  Correct!'}
@@ -2086,6 +2151,8 @@ export default function ScalesScreen() {
             <Text style={{ color: colors.textSecondary, fontSize: 14, letterSpacing: 0.5 }}>🎸  Play a note…</Text>
           )}
         </View>
+          );
+        })()}
 
         <TouchableOpacity
           style={[styles.nextBtn, { backgroundColor: colors.secondary, borderColor: colors.buttonBorder }]}
