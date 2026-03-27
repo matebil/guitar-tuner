@@ -1045,6 +1045,64 @@ export default function ScalesScreen() {
               {fretRange.map((f) => {
                 const note = string.notes.find((n: any) => n.fret === f);
                 const isNut = f === 0;
+                let noteDot: React.ReactNode = null;
+
+                if (note) {
+                  const isPlayed = playedNoteIdx !== -1 &&
+                    NOTE_NAMES_SHARP.indexOf(note.noteNameSharp) === playedNoteIdx;
+                  const isRoot = Boolean(note.isRoot);
+
+                  let dotBg = isRoot ? colors.primary : colors.secondary;
+                  let dotBorder = isRoot ? colors.primaryBorder : colors.buttonBorder;
+                  let dotTextColor = isRoot ? colors.textOnPrimary : colors.text;
+                  let dotBorderWidth = isRoot ? 2 : 1;
+                  let dotOpacity: number | Animated.Value = 1;
+                  let dotTransform: { scale: Animated.AnimatedInterpolation<number> }[] = [];
+
+                  if (isPlayed) {
+                    dotBg = detectedInScale ? '#22c55e' : colors.sharp;
+                    dotBorder = detectedInScale ? '#16a34a' : colors.sharp;
+                    dotTextColor = '#fff';
+                    dotBorderWidth = 2.5;
+                    dotOpacity = pulseAnim;
+                    dotTransform = [{
+                      scale: pulseAnim.interpolate({
+                        inputRange: [0.45, 1],
+                        outputRange: [1, 1.22],
+                      }),
+                    }];
+                  }
+
+                  noteDot = (
+                    <Animated.View
+                      style={{
+                        width: DOT_SIZE,
+                        height: DOT_SIZE,
+                        borderRadius: DOT_SIZE / 2,
+                        backgroundColor: dotBg,
+                        borderWidth: dotBorderWidth,
+                        borderColor: dotBorder,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        zIndex: 1,
+                        opacity: dotOpacity,
+                        transform: dotTransform,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color: dotTextColor,
+                          fontSize: note.noteName.length > 2 ? 7 : 9,
+                          fontWeight: 'bold',
+                          fontFamily: 'monospace',
+                        }}
+                      >
+                        {note.noteName}
+                      </Text>
+                    </Animated.View>
+                  );
+                }
+
                 return (
                   <View
                     key={f}
@@ -1069,50 +1127,7 @@ export default function ScalesScreen() {
                       }}
                     />
                     {/* Dot de nota */}
-                    {note ? (() => {
-                      const isPlayed = playedNoteIdx !== -1 &&
-                        NOTE_NAMES_SHARP.indexOf(note.noteNameSharp) === playedNoteIdx;
-                      const dotBg = isPlayed
-                        ? (detectedInScale ? '#22c55e' : colors.sharp)
-                        : (note.isRoot ? colors.primary : colors.secondary);
-                      const dotBorder = isPlayed
-                        ? (detectedInScale ? '#16a34a' : colors.sharp)
-                        : (note.isRoot ? colors.primaryBorder : colors.buttonBorder);
-                      const dotTextColor = isPlayed
-                        ? '#fff'
-                        : (note.isRoot ? colors.textOnPrimary : colors.text);
-                      return (
-                        <Animated.View
-                          style={{
-                            width: DOT_SIZE,
-                            height: DOT_SIZE,
-                            borderRadius: DOT_SIZE / 2,
-                            backgroundColor: dotBg,
-                            borderWidth: isPlayed ? 2.5 : (note.isRoot ? 2 : 1),
-                            borderColor: dotBorder,
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            zIndex: 1,
-                            opacity: isPlayed ? pulseAnim : 1,
-                            transform: isPlayed ? [{ scale: pulseAnim.interpolate({
-                              inputRange: [0.45, 1],
-                              outputRange: [1, 1.22],
-                            }) }] : [],
-                          }}
-                        >
-                          <Text
-                            style={{
-                              color: dotTextColor,
-                              fontSize: note.noteName.length > 2 ? 7 : 9,
-                              fontWeight: 'bold',
-                              fontFamily: 'monospace',
-                            }}
-                          >
-                            {note.noteName}
-                          </Text>
-                        </Animated.View>
-                      );
-                    })() : null}
+                    {noteDot}
                   </View>
                 );
               })}
@@ -1261,6 +1276,65 @@ export default function ScalesScreen() {
                     {pentFretRange.map((f) => {
                       const note = string.notes.find((n: any) => n.fret === f);
                       const isNut = f === 0;
+                      let noteDot: React.ReactNode = null;
+
+                      if (note) {
+                        const noteIdx = NOTE_CHROMA_MAP[note.noteName] ?? -1;
+                        const isPlayed = playedNoteIdx !== -1 && noteIdx === playedNoteIdx;
+                        const isInPentatonic = isPlayed ? pentNoteIdxSet.has(playedNoteIdx) : true;
+                        const isRoot = Boolean(note.isRoot);
+
+                        let dotBg = isRoot ? colors.primary : colors.secondary;
+                        let dotBorder = isRoot ? colors.primaryBorder : colors.buttonBorder;
+                        let dotTextColor = isRoot ? colors.textOnPrimary : colors.text;
+                        let dotBorderWidth = isRoot ? 2 : 1;
+                        let dotOpacity: number | Animated.Value = 1;
+                        let dotTransform: { scale: Animated.AnimatedInterpolation<number> }[] = [];
+
+                        if (isPlayed) {
+                          dotBg = isInPentatonic ? '#22c55e' : colors.sharp;
+                          dotBorder = isInPentatonic ? '#16a34a' : colors.sharp;
+                          dotTextColor = '#fff';
+                          dotBorderWidth = 2.5;
+                          dotOpacity = pulseAnim;
+                          dotTransform = [{
+                            scale: pulseAnim.interpolate({
+                              inputRange: [0.45, 1],
+                              outputRange: [1, 1.22],
+                            }),
+                          }];
+                        }
+
+                        noteDot = (
+                          <Animated.View
+                            style={{
+                              width: DOT_SIZE,
+                              height: DOT_SIZE,
+                              borderRadius: DOT_SIZE / 2,
+                              backgroundColor: dotBg,
+                              borderWidth: dotBorderWidth,
+                              borderColor: dotBorder,
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              zIndex: 1,
+                              opacity: dotOpacity,
+                              transform: dotTransform,
+                            }}
+                          >
+                            <Text
+                              style={{
+                                color: dotTextColor,
+                                fontSize: note.noteName.length > 2 ? 7 : 9,
+                                fontWeight: 'bold',
+                                fontFamily: 'monospace',
+                              }}
+                            >
+                              {note.noteName}
+                            </Text>
+                          </Animated.View>
+                        );
+                      }
+
                       return (
                         <View
                           key={f}
@@ -1283,46 +1357,7 @@ export default function ScalesScreen() {
                               opacity: 0.8,
                             }}
                           />
-                          {note && (() => {
-                            const noteIdx = NOTE_CHROMA_MAP[note.noteName] ?? -1;
-                            const isPlayed = playedNoteIdx !== -1 && noteIdx === playedNoteIdx;
-                            const isInPentatonic = isPlayed ? pentNoteIdxSet.has(playedNoteIdx) : true;
-                            return (
-                            <Animated.View
-                              style={{
-                                width: DOT_SIZE,
-                                height: DOT_SIZE,
-                                borderRadius: DOT_SIZE / 2,
-                                backgroundColor: isPlayed
-                                  ? (isInPentatonic ? '#22c55e' : colors.sharp)
-                                  : (note.isRoot ? colors.primary : colors.secondary),
-                                borderWidth: isPlayed ? 2.5 : (note.isRoot ? 2 : 1),
-                                borderColor: isPlayed
-                                  ? (isInPentatonic ? '#16a34a' : colors.sharp)
-                                  : (note.isRoot ? colors.primaryBorder : colors.buttonBorder),
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                zIndex: 1,
-                                opacity: isPlayed ? pulseAnim : 1,
-                                transform: isPlayed ? [{ scale: pulseAnim.interpolate({
-                                  inputRange: [0.45, 1],
-                                  outputRange: [1, 1.22],
-                                }) }] : [],
-                              }}
-                            >
-                              <Text
-                                style={{
-                                  color: isPlayed ? '#fff' : (note.isRoot ? colors.textOnPrimary : colors.text),
-                                  fontSize: note.noteName.length > 2 ? 7 : 9,
-                                  fontWeight: 'bold',
-                                  fontFamily: 'monospace',
-                                }}
-                              >
-                                {note.noteName}
-                              </Text>
-                            </Animated.View>
-                            );
-                          })()}
+                          {noteDot}
                         </View>
                       );
                     })}
