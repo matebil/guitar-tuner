@@ -36,6 +36,18 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
+# test coverage
+coverage/
+
+# editor config
+.vscode/
+
+# python venv
+.venv/
+
+# internal docs (store descriptions, dev notes)
+/docs
+
 # generated native folders
 /ios
 /android

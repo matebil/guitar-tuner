@@ -18,7 +18,8 @@ export type ByFretRound = {
   fret: number;
   currentString: number;
   remainingStrings: number[];
-  revealed: boolean;
+  roundStartedAt: number;
+  currentStringStartedAt: number;
 };
 
 export type FretboardAttemptRow = {
@@ -102,11 +103,18 @@ export function makeFretboardQuestion(
   return { stringNumber: target.stringNumber, fret: target.fret, correctNote, options };
 }
 
-export function makeByFretRound(): ByFretRound {
-  const fret = Math.floor(Math.random() * 25);
+export function makeByFretRound(fixedFret?: number): ByFretRound {
+  const fret = typeof fixedFret === 'number' ? fixedFret : Math.floor(Math.random() * 25);
   const currentString = randomFrom(ALL_STRINGS);
   const remainingStrings = ALL_STRINGS.filter((n) => n !== currentString);
-  return { fret, currentString, remainingStrings, revealed: false };
+  const now = Date.now();
+  return {
+    fret,
+    currentString,
+    remainingStrings,
+    roundStartedAt: now,
+    currentStringStartedAt: now,
+  };
 }
 
 export function csvEscape(value: string | number | boolean): string {
